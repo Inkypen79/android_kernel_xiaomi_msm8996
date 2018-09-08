@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2016 XiaoMi, Inc.
+ * Copyright (C) 2011 XiaoMi, Inc.
+ * Copyright (C) 2018 XiaoMi, Inc.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -11,14 +12,14 @@
  * GNU General Public License for more details.
  *
  */
-
 #include <linux/input/ft5x46_ts.h>
+
 #include "ft8716_pramboot.h"
 
-
+/* #define FT5X46_DEBUG_PERMISSION */
 #define FT5X46_APK_DEBUG_CHANNEL
 
-
+/* register address */
 #define FT5X0X_REG_DEVIDE_MODE	0x00
 #define FT5X0X_REG_ROW_ADDR		0x01
 #define FT5X0X_REG_TD_STATUS		0x02
@@ -83,12 +84,6 @@
 
 /* ft8716 firmware upgrade definition */
 #define FT8716_FIRMWARE_VERION		0x10e
-
-#ifdef CONFIG_TOUCHSCREEN_FT8716_DISABLE_FW_UPDATE
-#define FT8716_DISABLE_FW_UPDATE	1
-#else
-#define FT8716_DISABLE_FW_UPDATE	0
-#endif
 
 /* ft5x0x firmware upgrade definition */
 #define FT5X0X_FIRMWARE_TAIL		(-8) /* base on the end of firmware */
@@ -187,7 +182,9 @@
 #define FT5X46_INPUT_EVENT_END				5
 
 #define LEN_FLASH_ECC_MAX		0xFFFE
+#define FT5X46_ESD_CHECK_PERIOD	5000
 
+static bool lcd_need_reset;
 static unsigned char proc_operate_mode = FT5X46_PROC_UPGRADE;
 static struct proc_dir_entry *ft5x46_proc_entry;
 #endif
@@ -222,7 +219,7 @@ struct ft5x46_data *ft_data;
 
 static int ft5x46_recv_byte(struct ft5x46_data *ft5x46, int len, ...)
 {
-	int error;
+	int error = 0;
 	va_list varg;
 	u8 i, buf[len];
 
@@ -366,7 +363,7 @@ static void ft5x46_enable_irq(struct ft5x46_data *ft5x46)
 #ifdef CONFIG_TOUCHSCREEN_FT5X46_CALIBRATE
 static int ft5x46_auto_calib(struct ft5x46_data *ft5x46)
 {
-	int error;
+	int error = 0;
 	u8 val1;
 	int i;
 	msleep(200);
@@ -421,7 +418,7 @@ static u8 reset_delay[] = {
 
 static int ft5x46_hid_to_std_i2c(struct ft5x46_data *ft5x46)
 {
-	int error;
+	int error = 0;
 	u8 val1, val2, val3;
 
 	error = ft5x46_send_byte(ft5x46, 3, 0xEB, 0xAA, 0x09);
@@ -625,7 +622,8 @@ static int ft5x46_load_firmware(struct ft5x46_data *ft5x46,
 						ft5x46->chip_id);
 					ft5x46->current_index = i;
 					break;
-				} else
+				}
+				else
 					continue;
 			else
 				break;
@@ -785,6 +783,28 @@ static int ft5x46_load_firmware(struct ft5x46_data *ft5x46,
 
 		ft5x46_wait_for_ready(ft5x46, (u8)((0x1000 + i) >> 8), (u8)((0x1000 + i) & 0xFF), 30, 1);
 	}
+#if 0
+	for (i = 0; i < firmware->size; i += length) {
+		length = min(FT5X0X_PACKET_LENGTH,
+				firmware->size - i);
+
+		packet.offset = cpu_to_be16(i);
+		packet.length = cpu_to_be16(length);
+
+		for (j = 0; j < length; j++) {
+			packet.payload[j] = firmware->data[i + j];
+			ecc ^= firmware->data[i + j];
+		}
+
+		error = ft5x46_send_block(ft5x46, &packet,
+					FT5X0X_PACKET_HEADER + length);
+		if (error)
+			return error;
+
+		ft5x46_wait_for_ready(ft5x46, (u8)((0x1000 + packet_num) >> 8), (u8)((0x1000 + packet_num) & 0xFF), 30, 1);
+		packet_num ++;
+	}
+#endif
 	dev_info(ft5x46->dev, "[FTS] step6a: Send data in 128 bytes chunk each time.\n");
 
 	/* step 6b: send the last bytes */
@@ -1278,6 +1298,7 @@ static int ft8716_load_firmware(struct ft5x46_data *ft5x46,
 			ft8716_reset_firmware(ft5x46);
 			return error;
 		}
+		update_hardware_info(TYPE_TP_MAKER, ft5x46->lockdown_info[0] - 0x30);
 		ft5x46->lockdown_info_acquired = true;
 		wake_up(&ft5x46->lockdown_info_acquired_wq);
 	}
@@ -1328,7 +1349,7 @@ static int ft8716_load_firmware(struct ft5x46_data *ft5x46,
 
 	/* step 1: check firmware id is different */
 
-	if (id == firmware->data[FT8716_FIRMWARE_VERION] || FT8716_DISABLE_FW_UPDATE) {
+	if (id == firmware->data[FT8716_FIRMWARE_VERION]) {
 		ft8716_reset_firmware(ft5x46);
 		return 0;
 	}
@@ -1641,7 +1662,7 @@ static void ft5x46_report_value(struct ft5x46_data *ft5x46)
 		input_mt_slot(ft5x46->input, event->finger_id[i]);
 
 		if (event->touch_event[i] == 0 || event->touch_event[i] == 2) {
-
+			/* Touch down */
 			input_mt_report_slot_state(ft5x46->input, MT_TOOL_FINGER, true);
 			input_report_abs(ft5x46->input, ABS_MT_TOUCH_MAJOR, event->touch_misc[i]);
 			input_report_abs(ft5x46->input, ABS_MT_TOUCH_MINOR, event->touch_misc[i]);
@@ -1651,7 +1672,7 @@ static void ft5x46_report_value(struct ft5x46_data *ft5x46)
 			touchs |= BIT(event->finger_id[i]);
 			ft5x46->touchs |= BIT(event->finger_id[i]);
 		} else {
-
+			/* Release finger */
 			up_point++;
 			input_mt_report_slot_state(ft5x46->input, MT_TOOL_FINGER, false);
 
@@ -1680,7 +1701,7 @@ static void ft5x46_report_value(struct ft5x46_data *ft5x46)
 static int ft5x46_read_gesture(struct ft5x46_data *ft5x46)
 {
 	unsigned char buf[FT5X46_GESTURE_POINTS_HEADER] = { 0 };
-	int error;
+	int error = 0;
 
 	error = ft5x46_read_block(ft5x46, 0xD3, buf,
 			FT5X46_GESTURE_POINTS_HEADER);
@@ -1790,6 +1811,7 @@ int ft5x46_suspend(struct ft5x46_data *ft5x46)
 	mutex_unlock(&ft5x46->mutex);
 
 	cancel_delayed_work_sync(&ft5x46->noise_filter_delayed_work);
+	cancel_delayed_work_sync(&ft5x46->lcd_esdcheck_work);
 #ifdef CONFIG_TOUCHSCREEN_FT5X46P_PROXIMITY
 	cancel_delayed_work_sync(&ft5x46->prox_enable_delayed_work);
 #endif
@@ -1855,6 +1877,9 @@ int ft5x46_resume(struct ft5x46_data *ft5x46)
 
 	mutex_lock(&ft5x46->mutex);
 	ft5x46->in_suspend = false;
+
+	schedule_delayed_work(&ft5x46->lcd_esdcheck_work,
+				msecs_to_jiffies(FT5X46_ESD_CHECK_PERIOD));
 
 out:
 	mutex_unlock(&ft5x46->mutex);
@@ -2084,7 +2109,7 @@ static ssize_t ft5x46_object_store(struct device *dev,
 {
 	struct ft5x46_data *ft5x46 = dev_get_drvdata(dev);
 	u8 addr, val;
-	int error;
+	int error = 0;
 
 	mutex_lock(&ft5x46->mutex);
 	if (sscanf(buf, "%hhx=%hhx", &addr, &val) == 2)
@@ -2115,7 +2140,7 @@ static ssize_t ft5x46_dbgdump_store(struct device *dev,
 {
 	struct ft5x46_data *ft5x46 = dev_get_drvdata(dev);
 	unsigned long dbgdump;
-	int error;
+	int error = 0;
 
 	mutex_lock(&ft5x46->mutex);
 	error = kstrtoul(buf, 0, &dbgdump);
@@ -2160,7 +2185,7 @@ static ssize_t ft5x46_updatefw_store(struct device *dev,
 				const char *buf, size_t count)
 {
 	struct ft5x46_data *ft5x46 = dev_get_drvdata(dev);
-	int error;
+	int error = 0;
 	bool upgraded;
 
 	error = ft5x46_updatefw_with_filename(ft5x46,
@@ -2175,7 +2200,7 @@ static ssize_t ft5x46_tpfwver_show(struct device *dev,
 	struct ft5x46_data *ft5x46 = dev_get_drvdata(dev);
 	ssize_t num_read_chars = 0;
 	u8 fwver = 0;
-	int error;
+	int error = 0;
 	mutex_lock(&ft5x46->mutex);
 	error = ft5x46_read_byte(ft5x46, FT5X0X_REG_FW_VER, &fwver);
 	if (error)
@@ -2190,6 +2215,8 @@ static int ft5x46_enter_factory(struct ft5x46_data *ft5x46_ts)
 {
 	u8 reg_val;
 	int error;
+
+	cancel_delayed_work_sync(&ft5x46_ts->lcd_esdcheck_work);
 
 	error = ft5x46_write_byte(ft5x46_ts, FT5X0X_REG_DEVIDE_MODE,
 							FT5X0X_DEVICE_MODE_TEST);
@@ -2209,8 +2236,8 @@ static int ft5x46_enter_factory(struct ft5x46_data *ft5x46_ts)
 
 static int ft5x46_enter_work(struct ft5x46_data *ft5x46_ts)
 {
-	u8 reg_val;
-	int error;
+	u8 reg_val = 0;
+	int error = 0;
 	error = ft5x46_write_byte(ft5x46_ts, FT5X0X_REG_DEVIDE_MODE,
 							FT5X0X_DEVICE_MODE_NORMAL);
 	if (error)
@@ -2224,6 +2251,9 @@ static int ft5x46_enter_work(struct ft5x46_data *ft5x46_ts)
 		return -EPERM;
 	}
 
+	schedule_delayed_work(&ft5x46_ts->lcd_esdcheck_work,
+				msecs_to_jiffies(FT5X46_ESD_CHECK_PERIOD));
+
 	return 0;
 }
 
@@ -2232,7 +2262,7 @@ static int ft5x46_get_rawData(struct ft5x46_data *ft5x46_ts,
 					 u16 *rawdata)
 {
 	int ret_val = 0;
-	int error;
+	int error = 0;
 	u8 val;
 	int row_num = 0;
 	u8 read_buffer[FT5X0X_MAX_RX_NUM * 2];
@@ -2310,13 +2340,13 @@ static ssize_t ft5x46_rawdata_show(struct device *dev,
 	struct ft5x46_ts_platform_data *pdata = ft5x46->dev->platform_data;
 	int index = ft5x46->current_index;
 	u16 *rawdata;
-	int error;
+	int error = 0;
 	int i = 0, j = 0;
 	int num_read_chars = 0;
 	int tx_num = pdata->testdata[index].tx_num;
 	int rx_num = pdata->testdata[index].rx_num;
 
-	rawdata = (u16 *)kmalloc(sizeof(u16) * tx_num * rx_num, GFP_KERNEL);
+	rawdata = (u16*)kmalloc(sizeof(u16) * tx_num * rx_num, GFP_KERNEL);
 	if (rawdata == NULL)
 		return -ENOMEM;
 
@@ -2359,13 +2389,13 @@ unsigned int ft5x46_do_selftest(struct ft5x46_data *ft5x46)
 	int index = ft5x46->current_index;
 	u16 *testdata;
 	int i, j;
-	int error;
+	int error = 0;
 	int tx_num = pdata->testdata[index].tx_num;
 	int rx_num = pdata->testdata[index].rx_num;
 	int final_tx_num = tx_num;
 	int final_rx_num = rx_num;
 
-	testdata = (u16 *)kmalloc(sizeof(u16) * tx_num * rx_num, GFP_KERNEL);
+	testdata = (u16*)kmalloc(sizeof(u16) * tx_num * rx_num, GFP_KERNEL);
 	if (testdata == NULL)
 		return -ENOMEM;
 
@@ -2382,7 +2412,7 @@ unsigned int ft5x46_do_selftest(struct ft5x46_data *ft5x46)
 	for (i = 0; i < final_tx_num; i++) {
 		for (j = 0; j < final_rx_num; j++) {
 			if (testdata[i * rx_num + j] < pdata->raw_min ||
-				testdata[i * rx_num + j] > pdata->raw_max)
+				testdata[i * rx_num +j] > pdata->raw_max)
 				return 0;
 		}
 	}
@@ -2395,7 +2425,7 @@ static ssize_t ft5x46_selftest_store(struct device *dev,
 				const char *buf, size_t count)
 {
 	struct ft5x46_data *ft5x46 = dev_get_drvdata(dev);
-	int error;
+	int error = 0;
 	unsigned long val;
 
 	error = kstrtoul(buf, 0, &val);
@@ -2506,7 +2536,7 @@ static ssize_t ft5x46_wakeup_mode_store(struct device *dev,
 				struct device_attribute *attr,
 				const char *buf, size_t count)
 {
-	int error;
+	int error = 0;
 	unsigned long val;
 	struct ft5x46_data *ft5x46 = dev_get_drvdata(dev);
 
@@ -2563,7 +2593,7 @@ static ssize_t ft5x46_prox_enable_store(struct device *dev,
 				struct device_attribute *attr,
 				const char *buf, size_t count)
 {
-	int error;
+	int error = 0;
 	unsigned long val;
 	struct ft5x46_data *ft5x46 = dev_get_drvdata(dev);
 
@@ -2655,6 +2685,27 @@ static ssize_t ft5x46_panel_vendor_show(struct device *dev,
 	return count;
 }
 
+static ssize_t ft5x46_lcd_esd_test(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	int error;
+	unsigned long val;
+
+	error = kstrtoul(buf, 0, &val);
+
+	if (error) {
+		pr_err("Invalid data\n");
+		return -EINVAL;
+	}
+	if (val)
+		lcd_need_reset = true;
+	else
+		lcd_need_reset = false;
+
+	return error ? : count;
+}
+
 /* sysfs */
 #ifdef FT5X46_DEBUG_PERMISSION
 static DEVICE_ATTR(tpfwver, 0666, ft5x46_tpfwver_show, NULL);
@@ -2691,6 +2742,7 @@ static DEVICE_ATTR(prox_rawdata, 0444, ft5x46_prox_rawdata_show, NULL);
 static DEVICE_ATTR(irq_enable, 0644, ft5x46_irq_enable_show, ft5x46_irq_enable_store);
 static DEVICE_ATTR(panel_vendor, 0644, ft5x46_panel_vendor_show, NULL);
 #endif
+static DEVICE_ATTR(esd_test, 0644, NULL, ft5x46_lcd_esd_test);
 
 static struct attribute *ft5x46_attrs[] = {
 	&dev_attr_tpfwver.attr,
@@ -2709,6 +2761,7 @@ static struct attribute *ft5x46_attrs[] = {
 #endif
 	&dev_attr_irq_enable.attr,
 	&dev_attr_panel_vendor.attr,
+	&dev_attr_esd_test.attr,
 	NULL
 };
 
@@ -2716,41 +2769,7 @@ static const struct attribute_group ft5x46_attr_group = {
 	.attrs = ft5x46_attrs
 };
 
-static int ft5x46_proc_init(struct kernfs_node *sysfs_node_parent)
-{
-	int ret = 0;
-	char *buf, *path = NULL;
-	char *double_tap_sysfs_node;
-	struct proc_dir_entry *proc_entry_tp = NULL;
-	struct proc_dir_entry *proc_symlink_tmp  = NULL;
-
-	buf = kzalloc(PATH_MAX, GFP_KERNEL);
-	if (buf)
-		path = kernfs_path(sysfs_node_parent, buf, PATH_MAX);
-
-	proc_entry_tp = proc_mkdir("touchpanel", NULL);
-	if (proc_entry_tp == NULL) {
-		ret = -ENOMEM;
-		pr_err("%s: Couldn't create touchpanel\n", __func__);
-	}
-
-	double_tap_sysfs_node = kzalloc(PATH_MAX, GFP_KERNEL);
-	if (double_tap_sysfs_node)
-		sprintf(double_tap_sysfs_node, "/sys%s/%s", path, "wakeup_mode");
-	proc_symlink_tmp = proc_symlink("double_tap_enable",
-			proc_entry_tp, double_tap_sysfs_node);
-	if (proc_symlink_tmp == NULL) {
-		ret = -ENOMEM;
-		pr_err("%s: Couldn't create double_tap_enable symlink\n", __func__);
-	}
-
-	kfree(buf);
-	kfree(double_tap_sysfs_node);
-
-	return ret;
-}
-
-static int ft5x46_power_on(struct ft5x46_data *data, bool on)
+static int ft5x46_panel_power(struct ft5x46_data *data, bool on)
 {
 	static bool status;
 	int rc = 0;
@@ -2761,20 +2780,6 @@ static int ft5x46_power_on(struct ft5x46_data *data, bool on)
 	}
 
 	if (on) {
-		rc = regulator_enable(data->vdd);
-		if (rc) {
-			dev_err(data->dev,
-				"Regulator vdd enable failed rc=%d\n", rc);
-			return rc;
-		}
-
-		rc = regulator_enable(data->vddio);
-		if (rc) {
-			dev_err(data->dev,
-				"Regulator vddio enable failed rc=%d\n", rc);
-			return rc;
-		}
-
 		rc = regulator_enable(data->lab);
 		if (rc) {
 			dev_err(data->dev,
@@ -2802,7 +2807,37 @@ static int ft5x46_power_on(struct ft5x46_data *data, bool on)
 				"Regulator lab disable failed rc=%d\n", rc);
 			return rc;
 		}
+	}
+	status = on;
 
+	return rc;
+}
+
+static int ft5x46_panel_vddio_power(struct ft5x46_data *data, bool on)
+{
+	static bool status;
+	int rc = 0;
+
+	if (on == status) {
+		pr_info("Regulator is already %s\n", on?"on":"off");
+		return 0;
+	}
+
+	if (on) {
+		rc = regulator_enable(data->vdd);
+		if (rc) {
+			dev_err(data->dev,
+				"Regulator vdd enable failed rc=%d\n", rc);
+			return rc;
+		}
+
+		rc = regulator_enable(data->vddio);
+		if (rc) {
+			dev_err(data->dev,
+				"Regulator vddio enable failed rc=%d\n", rc);
+			return rc;
+		}
+	} else {
 		rc = regulator_disable(data->vddio);
 		if (rc) {
 			dev_err(data->dev,
@@ -2822,9 +2857,43 @@ static int ft5x46_power_on(struct ft5x46_data *data, bool on)
 	return rc;
 }
 
+
+static int ft5x46_power_on(struct ft5x46_data *data, bool on)
+{
+	static bool status;
+	int rc = 0;
+
+	if (on == status) {
+		pr_info("Regulator is already %s\n", on?"on":"off");
+		return 0;
+	}
+
+	if (on) {
+		rc = ft5x46_panel_vddio_power(data, on);
+		if (rc)
+			return rc;
+
+		rc = ft5x46_panel_power(data, on);
+		if (rc)
+			return rc;
+
+	} else {
+		rc = ft5x46_panel_power(data, on);
+		if (rc)
+			return rc;
+
+		rc = ft5x46_panel_vddio_power(data, on);
+		if (rc)
+			return rc;
+	}
+	status = on;
+
+	return rc;
+}
+
 static int ft5x46_power_init(struct ft5x46_data *data, bool on)
 {
-	int rc;
+	int rc = 0;
 
 	if (!on)
 		goto pwr_deinit;
@@ -2878,7 +2947,7 @@ exit:
 static void ft5x46_dt_dump(struct device *dev,
 			struct ft5x46_ts_platform_data *pdata)
 {
-	int j;
+	int j = 0;
 
 	dev_dbg(dev, "i2c-pull-up = %d\n", (int)pdata->i2c_pull_up);
 	dev_dbg(dev, "reset gpio = %d\n", (int)pdata->reset_gpio);
@@ -2961,29 +3030,31 @@ static int ft5x46_pinctrl_select(struct ft5x46_data *ft5x46, bool on)
 	return 0;
 }
 
-#if defined(CONFIG_FB)
-extern void mdss_dsi_ulps_enable(bool enable);
-extern void mdss_dsi_ulps_suspend_enable(bool enable);
-extern bool mdss_panel_is_prim(struct fb_info *fbi);
+#if defined(CONFIG_DRM)
 static int fb_notifier_cb(struct notifier_block *self,
 	unsigned long event, void *data)
 {
-	struct fb_event *evdata = data;
 	int *blank;
+	int rc = 0;
+	struct drm_notify_data *evdata = data;
 	struct ft5x46_data *ft5x46 =
-		container_of(self, struct ft5x46_data, fb_notif);
+		container_of(self, struct ft5x46_data, drm_notifier);
 
+	if (!ft5x46->hw_is_ready) {
+		dev_err(ft5x46->dev, "Touch Hardware is not ready, skip");
+		return rc;
+	}
 	/* Receive notifications from primary panel only */
-	if (evdata && evdata->data && ft5x46 && mdss_panel_is_prim(evdata->info)) {
-		if (event == FB_EVENT_BLANK) {
+	if (evdata && evdata->data && ft5x46 && evdata->is_primary) {
+		if (event == DRM_EVENT_BLANK) {
 			blank = evdata->data;
-			if (*blank == FB_BLANK_UNBLANK || *blank == FB_BLANK_NORMAL) {
+			if (*blank == DRM_BLANK_UNBLANK) {
 				dev_dbg(ft5x46->dev, "##### UNBLANK SCREEN #####\n");
 				ft5x46_input_enable(ft5x46->input);
-				ft5x46_power_on(ft5x46, true);
-				mdss_dsi_ulps_suspend_enable(false);
-				mdss_dsi_ulps_enable(false);
-			} else if (*blank == FB_BLANK_POWERDOWN) {
+				if (!ft5x46->wakeup_mode)
+					rc = ft5x46_panel_power(ft5x46, true);
+				drm_dsi_ulps_enable(false);
+			} else if (*blank == DRM_BLANK_POWERDOWN) {
 				dev_dbg(ft5x46->dev, "##### BLANK SCREEN #####\n");
 				ft5x46_input_disable(ft5x46->input);
 #ifdef CONFIG_TOUCHSCREEN_FT5X46P_PROXIMITY
@@ -2991,39 +3062,38 @@ static int fb_notifier_cb(struct notifier_block *self,
 #else
 				if (!ft5x46->wakeup_mode)
 #endif
-					ft5x46_power_on(ft5x46, false);
+					rc = ft5x46_panel_power(ft5x46, false);
 			}
-		} else if (event == FB_EARLY_EVENT_BLANK) {
+		} else if (event == DRM_EARLY_EVENT_BLANK) {
 			blank = evdata->data;
 #ifdef CONFIG_TOUCHSCREEN_FT5X46P_PROXIMITY
-			if (*blank == FB_BLANK_POWERDOWN &&
+			if (*blank == DRM_BLANK_POWERDOWN &&
 				(ft5x46->wakeup_mode || ft5x46->proximity_enable)) {
 #else
-			if (*blank == FB_BLANK_POWERDOWN && ft5x46->wakeup_mode) {
+			if (*blank == DRM_BLANK_POWERDOWN && ft5x46->wakeup_mode) {
 #endif
 				pr_debug("Enable suspend ulps\n");
-				mdss_dsi_ulps_enable(true);
-				mdss_dsi_ulps_suspend_enable(true);
+				drm_dsi_ulps_enable(true);
 			}
 		}
 	}
 
-	return 0;
+	return rc;
 }
 
 static int ft5x46_configure_sleep(struct ft5x46_data *ft5x46, bool enable)
 {
-	int ret;
+	int ret = 0;
 
-	ft5x46->fb_notif.notifier_call = fb_notifier_cb;
+	ft5x46->drm_notifier.notifier_call = fb_notifier_cb;
 	if (enable) {
-		ret = fb_register_client(&ft5x46->fb_notif);
+		ret = drm_register_client(&ft5x46->drm_notifier);
 		if (ret) {
 			dev_err(ft5x46->dev,
 				"Unable to register fb_notifier, err: %d\n", ret);
 		}
 	} else {
-		ret = fb_unregister_client(&ft5x46->fb_notif);
+		ret = drm_unregister_client(&ft5x46->drm_notifier);
 		if (ret) {
 			dev_err(ft5x46->dev,
 				"Unable to unregister fb_notifier, err: %d\n", ret);
@@ -3065,7 +3135,7 @@ static int ft5x46_configure_sleep(struct ft5x46_data *ft5x46, bool enable)
 static int ft5x46_parse_dt(struct device *dev,
 			struct ft5x46_ts_platform_data *pdata)
 {
-	int rc, j;
+	int rc = 0, j = 0;
 	struct device_node *np = dev->of_node;
 	u32 temp_val, num_fw;
 	struct device_node *sub_np;
@@ -3294,7 +3364,7 @@ static int ft5x46_parse_dt(struct device *dev,
 			return rc;
 		}
 
-		j++;
+		j ++;
 	}
 
 	ft5x46_dt_dump(dev, pdata);
@@ -3363,7 +3433,7 @@ static int ft5x46_input_event(struct input_dev *dev,
 				"event write value = %d\n", value);
 
 		if (value >= FT5X46_INPUT_EVENT_START && value <= FT5X46_INPUT_EVENT_END) {
-			ms = (struct ft5x46_mode_switch *)kmalloc(sizeof(struct ft5x46_mode_switch), GFP_ATOMIC);
+			ms = (struct ft5x46_mode_switch*)kmalloc(sizeof(struct ft5x46_mode_switch), GFP_ATOMIC);
 			if (ms != NULL) {
 				ms->data = ft5x46;
 				ms->mode = (u8)value;
@@ -3380,7 +3450,6 @@ static int ft5x46_input_event(struct input_dev *dev,
 	return 0;
 }
 
-
 #ifdef FT5X46_APK_DEBUG_CHANNEL
 static ssize_t ft5x46_apk_debug_read(struct file *file, char __user *buffer,
 				size_t buflen, loff_t *fpos)
@@ -3396,39 +3465,39 @@ static ssize_t ft5x46_apk_debug_read(struct file *file, char __user *buffer,
 	ft5x46_disable_irq(ft5x46);
 	mutex_lock(&ft5x46->mutex);
 	switch (proc_operate_mode) {
-	case FT5X46_PROC_UPGRADE:
-		ret = ft5x46_read_byte(ft5x46, FT5X0X_REG_FW_VER, &val);
-		if (ret < 0)
-			num_read_chars = snprintf(buf, PAGE_SIZE,
-				"%s", "Get FW version failed.\n");
-		else
-			num_read_chars = snprintf(buf, PAGE_SIZE,
-				"current fw version:0x%02x\n", val);
-		break;
+		case FT5X46_PROC_UPGRADE:
+			ret = ft5x46_read_byte(ft5x46, FT5X0X_REG_FW_VER, &val);
+			if (ret < 0)
+				num_read_chars = snprintf(buf, PAGE_SIZE,
+					"%s", "Get FW version failed.\n");
+			else
+				num_read_chars = snprintf(buf, PAGE_SIZE,
+					"current fw version:0x%02x\n", val);
+			break;
 
-	case FT5X46_PROC_READ_REGISTER:
-		ret = ft5x46_recv_byte(ft5x46, 1, &val);
-		if (ret < 0) {
-			dev_err(ft5x46->dev, "%s: read register failed\n", __func__);
-		} else {
-			buf[0] = val;
-			num_read_chars = 1;
-		}
-		break;
+		case FT5X46_PROC_READ_REGISTER:
+			ret = ft5x46_recv_byte(ft5x46, 1, &val);
+			if (ret < 0) {
+				dev_err(ft5x46->dev, "%s: read register failed\n", __func__);
+			} else {
+				buf[0] = val;
+				num_read_chars = 1;
+			}
+			break;
 
-	case FT5X46_PROC_READ_DATA:
-		ret = ft5x46_recv_block(ft5x46, buf, buflen);
-		if (ret < 0) {
-			dev_err(ft5x46->dev, "%s: read data failed\n", __func__);
-		} else {
-			num_read_chars = buflen;
-		}
-		break;
+		case FT5X46_PROC_READ_DATA:
+			ret = ft5x46_recv_block(ft5x46, buf, buflen);
+			if (ret < 0) {
+				dev_err(ft5x46->dev, "%s: read data failed\n", __func__);
+			} else {
+				num_read_chars = buflen;
+			}
+			break;
 
-	case FT5X46_PROC_WRITE_REGISTER:
-	case FT5X46_PROC_WRITE_DATA:
-	default:
-		break;
+		case FT5X46_PROC_WRITE_REGISTER:
+		case FT5X46_PROC_WRITE_DATA:
+		default:
+			break;
 	}
 	mutex_unlock(&ft5x46->mutex);
 	ft5x46_enable_irq(ft5x46);
@@ -3459,60 +3528,60 @@ static ssize_t ft5x46_apk_debug_write(struct file *file, const char __user *buff
 
 	proc_operate_mode = writebuf[0];
 	switch (proc_operate_mode) {
-	case FT5X46_PROC_UPGRADE:
-		memset(upgrade_file_name, 0, FT5X46_MAX_FIRMWARE_LENGTH);
-		snprintf(upgrade_file_name, FT5X46_MAX_FIRMWARE_LENGTH,
-			"%s", writebuf + 1);
-		upgrade_file_name[buflen - 1] = '\0';
-		dev_info(ft5x46->dev, "%s: upgrade file name: %s\n",
-			__func__, upgrade_file_name);
-		ret = ft5x46_updatefw_with_filename(ft5x46, upgrade_file_name, NULL);
-		if (ret < 0) {
-			dev_err(ft5x46->dev, "%s: upgrade failed\n",
-					__func__);
-			return ret;
-		}
-		break;
+		case FT5X46_PROC_UPGRADE:
+			memset(upgrade_file_name, 0, FT5X46_MAX_FIRMWARE_LENGTH);
+			snprintf(upgrade_file_name, FT5X46_MAX_FIRMWARE_LENGTH,
+				"%s", writebuf + 1);
+			upgrade_file_name[buflen - 1] = '\0';
+			dev_info(ft5x46->dev, "%s: upgrade file name: %s\n",
+				__func__, upgrade_file_name);
+			ret = ft5x46_updatefw_with_filename(ft5x46, upgrade_file_name, NULL);
+			if (ret < 0) {
+				dev_err(ft5x46->dev, "%s: upgrade failed\n",
+						__func__);
+				return ret;
+			}
+			break;
 
-	case FT5X46_PROC_READ_REGISTER:
-		dev_info(ft5x46->dev, "%s: read register from %d\n",
-			__func__, writebuf[1]);
-		ret = ft5x46_send_byte(ft5x46, 1, writebuf[1]);
-		if (ret < 0) {
-			dev_err(ft5x46->dev, "%s: read register failed\n", __func__);
-			return ret;
-		}
-		break;
+		case FT5X46_PROC_READ_REGISTER:
+			dev_info(ft5x46->dev, "%s: read register from %d\n",
+				__func__, writebuf[1]);
+			ret = ft5x46_send_byte(ft5x46, 1, writebuf[1]);
+			if (ret < 0) {
+				dev_err(ft5x46->dev, "%s: read register failed\n", __func__);
+				return ret;
+			}
+			break;
 
-	case FT5X46_PROC_WRITE_REGISTER:
-		dev_info(ft5x46->dev, "%s: write to register %d: %d\n",
-			__func__, writebuf[1], writebuf[2]);
-		ret = ft5x46_write_byte(ft5x46, writebuf[1], writebuf[2]);
-		if (ret < 0) {
-			dev_err(ft5x46->dev, "%s: write register failed\n", __func__);
-			return ret;
-		}
-		break;
+		case FT5X46_PROC_WRITE_REGISTER:
+			dev_info(ft5x46->dev, "%s: write to register %d: %d\n",
+				__func__, writebuf[1], writebuf[2]);
+			ret = ft5x46_write_byte(ft5x46, writebuf[1], writebuf[2]);
+			if (ret < 0) {
+				dev_err(ft5x46->dev, "%s: write register failed\n", __func__);
+				return ret;
+			}
+			break;
 
-	case FT5X46_PROC_AUTOCLB:
+		case FT5X46_PROC_AUTOCLB:
 #ifdef CONFIG_TOUCHSCREEN_FT5X46_CALIBRATE
-		dev_info(ft5x46->dev, "%s: Auto calibration\n", __func__);
-		ft5x46_auto_calib(ft5x46);
+			dev_info(ft5x46->dev, "%s: Auto calibration\n", __func__);
+			ft5x46_auto_calib(ft5x46);
 #endif
-		break;
+			break;
 
-	case FT5X46_PROC_READ_DATA:
-	case FT5X46_PROC_WRITE_DATA:
-		dev_info(ft5x46->dev, "%s: Read/Write data\n", __func__);
-		ret = ft5x46_send_block(ft5x46, writebuf + 1, buflen - 1);
-		if (ret < 0) {
-			dev_err(ft5x46->dev, "%s: read/write data failed\n", __func__);
-			return ret;
-		}
-		break;
+		case FT5X46_PROC_READ_DATA:
+		case FT5X46_PROC_WRITE_DATA:
+			dev_info(ft5x46->dev, "%s: Read/Write data\n", __func__);
+			ret = ft5x46_send_block(ft5x46, writebuf + 1, buflen - 1);
+			if (ret < 0) {
+				dev_err(ft5x46->dev, "%s: read/write data failed\n", __func__);
+				return ret;
+			}
+			break;
 
-	default:
-		break;
+		default:
+			break;
 	}
 
 	return buflen;
@@ -3531,7 +3600,7 @@ static int ft5x46_create_apk_debug_channel(struct ft5x46_data *ft5x46)
 		return -ENOMEM;
 	} else {
 		dev_info(ft5x46->dev, "Create proc entry successfully\n");
-
+		/* ft5x46_proc_entry->data = ft5x46; */
 	}
 
 	return 0;
@@ -3628,6 +3697,11 @@ void ft5x46_hw_init_work(struct work_struct *work)
 
 	ft5x46_enable_irq(ft5x46);
 	ft5x46->hw_is_ready = true;
+
+	queue_delayed_work(ft5x46->lcd_esdcheck_workqueue,
+						&ft5x46->lcd_esdcheck_work,
+						msecs_to_jiffies(FT5X46_ESD_CHECK_PERIOD));
+
 	return;
 
 failed:
@@ -3678,10 +3752,220 @@ failed:
 	return;
 }
 
+static void tpdbg_suspend(struct ft5x46_data *ft5x46, bool enable)
+{
+	if (enable)
+		ft5x46_suspend(ft5x46);
+	else
+		ft5x46_resume(ft5x46);
+}
+
+static int tpdbg_open(struct inode *inode, struct file *file)
+{
+	file->private_data = inode->i_private;
+
+	return 0;
+}
+
+static ssize_t tpdbg_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
+{
+
+	const char *str = "cmd support as below:\n \
+				\necho \"irq-disable\" or \"irq-enable\" to ctrl irq\n \
+				\necho \"tp-suspend-en\" or \"tp-suspend-off\" to ctrl panel in or off suspend status\n \
+				\necho \"tp-sd-en\" or \"tp-sd-off\" to ctrl panel in or off sleep status\n";
+
+	loff_t pos = *ppos;
+	int len = strlen(str);
+
+	if (pos < 0)
+		return -EINVAL;
+	if (pos >= len)
+		return 0;
+
+	if (copy_to_user(buf, str, len))
+		return -EFAULT;
+
+	*ppos = pos + len;
+
+	return len;
+}
+
+static ssize_t tpdbg_write(struct file *file, const char __user *buf, size_t size, loff_t *ppos)
+{
+	struct ft5x46_data *ft5x46 = file->private_data;
+	struct ft5x46_ts_platform_data *pdata = ft5x46->dev->platform_data;
+	char *cmd = kzalloc(size + 1, GFP_KERNEL);
+	int ret = size;
+
+	if (!cmd)
+		return -ENOMEM;
+
+	if (copy_from_user(cmd, buf, size)) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	cmd[size] = '\0';
+
+	if (!strncmp(cmd, "irq-disable", 11))
+		disable_irq(ft5x46->irq);
+	else if (!strncmp(cmd, "irq-enable", 10))
+		enable_irq(ft5x46->irq);
+	else if (!strncmp(cmd, "tp-suspend-en", 13))
+		tpdbg_suspend(ft5x46, true);
+	else if (!strncmp(cmd, "tp-suspend-off", 14))
+		tpdbg_suspend(ft5x46, false);
+	else if (!strncmp(cmd, "tp-sd-en", 8))
+		ft5x46_write_byte(ft5x46, FT5X0X_ID_G_PMODE, FT5X0X_POWER_HIBERNATE);
+	else if (!strncmp(cmd, "tp-sd-off", 9)) {
+		gpio_set_value(pdata->reset_gpio, 0);
+		mdelay(5);
+		gpio_set_value(pdata->reset_gpio, 1);
+		mdelay(5);
+	}
+out:
+	kfree(cmd);
+
+	return ret;
+}
+
+static int tpdbg_release (struct inode *inode, struct file *file)
+{
+	file->private_data = NULL;
+
+	return 0;
+}
+
+static const struct file_operations tpdbg_operations = {
+	.owner = THIS_MODULE,
+	.open = tpdbg_open,
+	.read = tpdbg_read,
+	.write = tpdbg_write,
+	.release = tpdbg_release,
+};
+
+static ssize_t tp_ic_vendor_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
+{
+
+	const char *str = "FocalTech\n";
+
+	loff_t pos = *ppos;
+	int len = strlen(str);
+
+	if (pos < 0)
+		return -EINVAL;
+	if (pos >= len)
+		return 0;
+
+	if (copy_to_user(buf, str, len))
+		return -EFAULT;
+
+	*ppos = pos + len;
+
+	return len;
+}
+
+static const struct file_operations tp_ic_vendor_operations = {
+	.owner = THIS_MODULE,
+	.read = tp_ic_vendor_read,
+};
+
+#define TP_INFO_MAX_LENGTH 50
+static ssize_t ft5x46_fw_version_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+{
+	int cnt = 0, ret = 0;
+	char tmp[TP_INFO_MAX_LENGTH];
+	u8 id = 0;
+	struct ft5x46_data *ft5x46 = ft_data;
+
+	if (*pos != 0)
+		return 0;
+	ret = ft5x46_read_byte(ft5x46, FT5X0X_REG_FW_VER, &id);
+	if (ret)
+		return 0;
+
+	cnt = snprintf(tmp, TP_INFO_MAX_LENGTH, "%x\n", id);
+	ret = copy_to_user(buf, tmp, cnt);
+	*pos += cnt;
+	if (ret != 0)
+		return 0;
+	else
+		return cnt;
+}
+
+static const struct file_operations ft5x46_fw_version_ops = {
+	.read		= ft5x46_fw_version_read,
+};
+
+static ssize_t ft5x46_lockdown_info_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+{
+	int cnt = 0, ret = 0;
+	char tmp[TP_INFO_MAX_LENGTH];
+	struct ft5x46_data *ft5x46 = ft_data;
+
+	if (*pos != 0)
+		return 0;
+	cnt = snprintf(tmp, TP_INFO_MAX_LENGTH, "0x%02x,0x%02x,0x%02x,0x%02x,0x%02x,0x%02x,0x%02x,0x%02x\n",
+			 ft5x46->lockdown_info[0], ft5x46->lockdown_info[1], ft5x46->lockdown_info[2], ft5x46->lockdown_info[3],
+			 ft5x46->lockdown_info[4], ft5x46->lockdown_info[5], ft5x46->lockdown_info[6], ft5x46->lockdown_info[7]);
+	ret = copy_to_user(buf, tmp, cnt);
+	*pos += cnt;
+	if (ret != 0)
+		return 0;
+	else
+		return cnt;
+}
+
+static const struct file_operations ft5x46_lockdown_info_ops = {
+	.read		= ft5x46_lockdown_info_read,
+};
+
+int idc_esdcheck_lcderror(struct ft5x46_data *ft5x46)
+{
+	u8 val;
+	int ret;
+
+	ret = ft5x46_read_byte(ft5x46, 0xED, &val);
+	if (ret) {
+		dev_err(ft5x46->dev, "[ESD] Failed to read 0xaa\n");
+		return -EIO;
+	}
+
+	if (val == 0xAA) {
+		dev_err(ft5x46->dev, "[ESD] LCD esd, Need Execute LCD reset\n");
+		lcd_need_reset = true;
+	}
+	dev_dbg(ft5x46->dev, "%s ESD:0x%x\n", __func__, val);
+
+	if (lcd_need_reset == true) {
+		report_esd_panel_dead();
+		lcd_need_reset = false;
+	}
+
+	return 0;
+}
+
+static void esdcheck_func(struct work_struct *work)
+{
+
+	struct delayed_work *delayed_work = to_delayed_work(work);
+	struct ft5x46_data *ft5x46 = container_of(delayed_work, struct ft5x46_data, lcd_esdcheck_work);
+	if (!ft5x46)
+		return;
+
+	if (!ft5x46->in_suspend) {
+		idc_esdcheck_lcderror(ft5x46);
+		queue_delayed_work(ft5x46->lcd_esdcheck_workqueue,
+							&ft5x46->lcd_esdcheck_work,
+							msecs_to_jiffies(FT5X46_ESD_CHECK_PERIOD));
+	}
+}
+
 struct ft5x46_data *ft5x46_probe(struct device *dev,
 				const struct ft5x46_bus_ops *bops)
 {
-	int error;
+	int error = 0;
 	struct ft5x46_data *ft5x46;
 	struct ft5x46_ts_platform_data *pdata;
 
@@ -3928,8 +4212,6 @@ struct ft5x46_data *ft5x46_probe(struct device *dev,
 		goto err_free_irq;
 	}
 
-	ft5x46_proc_init(dev->kobj.sd);
-
 	error = ft5x46_configure_sleep(ft5x46, true);
 	if (error) {
 		dev_err(dev, "Failed to configure sleep\n");
@@ -3971,11 +4253,30 @@ struct ft5x46_data *ft5x46_probe(struct device *dev,
 
 	INIT_DELAYED_WORK(&ft5x46->noise_filter_delayed_work,
 				ft5x46_noise_filter_delayed_work);
+
+	INIT_DELAYED_WORK(&ft5x46->lcd_esdcheck_work, esdcheck_func);
+	ft5x46->lcd_esdcheck_workqueue = create_workqueue("touch_lcd_esdcheck_wq");
+	if (!ft5x46->lcd_esdcheck_workqueue) {
+		dev_err(dev, "Failed to create lcd esd workqueue\n");
+		goto err_sysfs_create_virtualkeys;
+	}
 #ifdef CONFIG_TOUCHSCREEN_FT5X46P_PROXIMITY
 	INIT_DELAYED_WORK(&ft5x46->prox_enable_delayed_work,
 				ft5x46_prox_enable_delayed_work);
 	init_waitqueue_head(&ft5x46->resume_wq);
 #endif
+
+	ft5x46->debugfs = debugfs_create_dir("tp_debug", NULL);
+	if (ft5x46->debugfs) {
+		debugfs_create_file("switch_state", 0660, ft5x46->debugfs, ft5x46, &tpdbg_operations);
+	}
+	ft5x46->tpfs = debugfs_create_dir("touch", NULL);
+	if (ft5x46->tpfs)
+		debugfs_create_file("tp_ic_vendor", 0400, ft5x46->tpfs, ft5x46, &tp_ic_vendor_operations);
+
+	ft5x46->tp_fw_version_proc = proc_create("tp_fw_version", 0, NULL, &ft5x46_fw_version_ops);
+	ft5x46->tp_lockdown_info_proc = proc_create("tp_lockdown_info", 0, NULL, &ft5x46_lockdown_info_ops);
+
 	ft5x46->hw_is_ready = false;
 	init_waitqueue_head(&ft5x46->lockdown_info_acquired_wq);
 	schedule_work(&ft5x46->work);
@@ -4064,6 +4365,7 @@ void ft5x46_remove(struct ft5x46_data *ft5x46)
 	cancel_delayed_work_sync(&ft5x46->prox_enable_delayed_work);
 #endif
 	cancel_delayed_work_sync(&ft5x46->noise_filter_delayed_work);
+	cancel_delayed_work_sync(&ft5x46->lcd_esdcheck_work);
 	power_supply_unreg_notifier(&ft5x46->power_supply_notifier);
 	if (ft5x46->vkeys_dir)
 		sysfs_remove_file(ft5x46->vkeys_dir, &ft5x46->vkeys_attr.attr);

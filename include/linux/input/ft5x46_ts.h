@@ -4,7 +4,7 @@
  *
  * Copyright (c) 2010  Focal tech Ltd.
  * Copyright (c) 2012, Code Aurora Forum. All rights reserved.
- * Copyright (C) 2016 XiaoMi, Inc.
+ * Copyright (C) 2018 XiaoMi, Inc.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -35,14 +35,15 @@
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/slab.h>
-#include <linux/wakelock.h>
 #include <linux/power_supply.h>
 #include <linux/input/mt.h>
 #include <linux/uaccess.h>
 #include <linux/proc_fs.h>
-#ifdef CONFIG_FB
+#include <linux/kernel.h>
+#ifdef CONFIG_DRM
 #include <linux/notifier.h>
-#include <linux/fb.h>
+#include <drm/drm_notifier.h>
+#include <drm/drm_panel.h>
 #endif
 
 #define FT5X46_LOCKDOWN_INFO_SIZE	8
@@ -58,17 +59,17 @@ struct ft5x46_bus_ops {
 
 /* platform data for Focaltech touchscreen */
 struct ft5x46_firmware_data {
-	u8 chip;
-	u8 vendor;
+	u8	chip;
+	u8	vendor;
 	u8 tp_vendor;
 	u8 lcd_vendor;
-	const char *fwname;
-	u8 *data;
-	int size;
+	const char	*fwname;
+	u8	*data;
+	int	size;
 };
 
 struct ft5x46_rect { /* rectangle on the touch screen */
-	u16 left , top;
+	u16 left, top;
 	u16 width, height;
 };
 
@@ -100,6 +101,7 @@ struct ft5x46_data {
 	struct notifier_block power_supply_notifier;
 	struct regulator *vdd;
 	struct regulator *vddio;
+	struct regulator *dispio;
 	struct regulator *lab;
 	struct regulator *ibb;
 	const struct ft5x46_bus_ops *bops;
@@ -122,6 +124,8 @@ struct ft5x46_data {
 #endif
 	struct delayed_work noise_filter_delayed_work;
 	struct work_struct work;
+	struct delayed_work lcd_esdcheck_work;
+	struct workqueue_struct *lcd_esdcheck_workqueue;
 	bool hw_is_ready;
 	u8 chip_id;
 	u8 is_usb_plug_in;
@@ -131,6 +135,7 @@ struct ft5x46_data {
 	u8 lockdown_info[FT5X46_LOCKDOWN_INFO_SIZE];
 	u8 config_info[FT5X46_CONFIG_INFO_SIZE];
 	bool wakeup_mode;
+	bool cover_mode;
 	bool force_update_noise_filter;
 
 	struct pinctrl *ts_pinctrl;
@@ -138,9 +143,14 @@ struct ft5x46_data {
 	struct pinctrl_state *gpio_state_suspend;
 
 	int touchs;
-#ifdef CONFIG_FB
-	struct notifier_block fb_notif;
+	int keys;
+#ifdef CONFIG_DRM
+	struct notifier_block drm_notifier;
 #endif
+	struct dentry *debugfs;
+	struct dentry *tpfs;
+	struct proc_dir_entry *tp_fw_version_proc;
+	struct proc_dir_entry *tp_lockdown_info_proc;
 };
 struct ft5x46_keypad_data {
 	/* two cases could happen:
@@ -164,6 +174,7 @@ struct ft5x46_upgrade_info {
 	u8	upgrade_id_1;	/*upgrade id 1*/
 	u8	upgrade_id_2;	/*upgrade id 2*/
 	u16	delay_readid;	/*delay of read id*/
+	u16	delay_erase;	/*delay of erase flash*/
 };
 
 struct ft5x46_ts_platform_data {
@@ -196,9 +207,15 @@ struct ft5x46_ts_platform_data {
 	u32 short_max;
 	u16 imin_cc;
 	u16 imin_cg;
+	bool has_key;
+	u16 key_rx1;
+	u16 key_rx2;
+	u16 key_rx3;
 	/* optional callback for platform needs */
 	int (*power_init)(bool);
 	int (*power_on) (bool);
+	bool x_flip;
+	bool y_flip;
 };
 
 struct ft5x46_data *ft5x46_probe(struct device *dev, const struct ft5x46_bus_ops *bops);
