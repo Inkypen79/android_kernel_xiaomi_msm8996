@@ -3126,6 +3126,24 @@ enum Tfa98xx_Error tfaRunWaitCalibration(struct tfa_device *tfa, int *calibrateD
 	return err;
 }
 
+enum tfa_error tfa98xxTotfa(enum Tfa98xx_Error err)
+{
+	switch(err) {
+	case Tfa98xx_Error_Ok:
+		return tfa_error_ok;
+	case Tfa98xx_Error_Device:
+		return tfa_error_device;
+	case Tfa98xx_Error_Bad_Parameter:
+		return tfa_error_bad_param;
+	case Tfa98xx_Error_NoClock:
+		return tfa_error_noclock;
+	case Tfa98xx_Error_StateTimedOut:
+		return tfa_error_timeout;
+	default:
+		return tfa_error_bad_param;
+	}
+}
+
 /*
  * tfa_dev_start will only do the basics: Going from powerdown to operating or a profile switch.
  * for calibrating or akoustic shock handling use the tfa98xxCalibration function.
@@ -3214,7 +3232,7 @@ enum tfa_error tfa_dev_start(struct tfa_device *tfa, int next_profile, int vstep
 error_exit:
 	show_current_state(tfa);
 
-	return err;
+	return tfa98xxTotfa(err);
 }
 
 enum tfa_error tfa_dev_stop(struct tfa_device *tfa)
@@ -3230,12 +3248,12 @@ enum tfa_error tfa_dev_stop(struct tfa_device *tfa)
 	/* powerdown CF */
 	err = tfa98xx_powerdown(tfa, 1);
 	if (err != Tfa98xx_Error_Ok)
-		return err;
+		return tfa98xxTotfa(err);
 
 	/* disable I2S output on TFA1 devices without TDM */
 	err = tfa98xx_aec_output(tfa, 0);
 
-	return err;
+	return tfa98xxTotfa(err);
 }
 
 /*
