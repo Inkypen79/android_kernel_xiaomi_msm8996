@@ -1039,9 +1039,7 @@ endif
 # enable the MAC Address auto-generation feature
 CDEFINES += -DWLAN_AUTOGEN_MACADDR_FEATURE
 
-ifeq ($(CONFIG_WLAN_FEATURE_11W),y)
 CDEFINES += -DWLAN_FEATURE_11W
-endif
 
 ifeq ($(CONFIG_QCOM_LTE_COEX),y)
 CDEFINES += -DFEATURE_WLAN_CH_AVOID
