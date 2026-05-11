@@ -176,7 +176,7 @@ static void loopback_setup(struct net_device *dev)
 		| NETIF_F_UFO
 		| NETIF_F_HW_CSUM
 		| NETIF_F_RXCSUM
-		| NETIF_F_SCTP_CSUM
+		| NETIF_F_SCTP_CRC
 		| NETIF_F_HIGHDMA
 		| NETIF_F_LLTX
 		| NETIF_F_NETNS_LOCAL
@@ -195,7 +195,7 @@ static __net_init int loopback_net_init(struct net *net)
 	int err;
 
 	err = -ENOMEM;
-	dev = alloc_netdev(0, "lo", NET_NAME_UNKNOWN, loopback_setup);
+	dev = alloc_netdev(0, "lo", NET_NAME_PREDICTABLE, loopback_setup);
 	if (!dev)
 		goto out;
 

@@ -8902,7 +8902,7 @@ static int msm_init_wsa_dev(struct platform_device *pdev,
 		goto err_dt;
 	}
 	if (wsa_max_devs == 0) {
-		dev_warn(&pdev->dev,
+		dev_dbg(&pdev->dev,
 			 "%s: Max WSA devices is 0 for this target?\n",
 			 __func__);
 		goto err_dt;
@@ -9330,7 +9330,10 @@ static int msm_asoc_machine_remove(struct platform_device *pdev)
 	struct msm_asoc_mach_data *pdata =
 				snd_soc_card_get_drvdata(card);
 
-	gpio_free(pdata->us_euro_gpio);
+	if (pdata->us_euro_gpio > 0) {
+		gpio_free(pdata->us_euro_gpio);
+		pdata->us_euro_gpio = 0;
+	}
 	i2s_auxpcm_deinit();
 
 	snd_soc_unregister_card(card);

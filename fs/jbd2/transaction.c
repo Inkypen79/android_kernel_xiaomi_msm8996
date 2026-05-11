@@ -1131,14 +1131,23 @@ int jbd2_journal_get_create_access(handle_t *handle, struct buffer_head *bh)
 	 * committing transaction's lists, but it HAS to be in Forget state in
 	 * that case: the transaction must have deleted the buffer for it to be
 	 * reused here.
+	 * In the case of file system data inconsistency, for example, if the
+	 * block bitmap of a referenced block is not set, it can lead to the
+	 * situation where a block being committed is allocated and used again.
+	 * As a result, the following condition will not be satisfied, so here
+	 * we directly trigger a JBD abort instead of immediately invoking
+	 * bugon.
 	 */
 	jbd_lock_bh_state(bh);
-	J_ASSERT_JH(jh, (jh->b_transaction == transaction ||
-		jh->b_transaction == NULL ||
-		(jh->b_transaction == journal->j_committing_transaction &&
-			  jh->b_jlist == BJ_Forget)));
+	if (!(jh->b_transaction == transaction || jh->b_transaction == NULL ||
+	      (jh->b_transaction == journal->j_committing_transaction &&
+	       jh->b_jlist == BJ_Forget)) || jh->b_next_transaction != NULL) {
+		err = -EROFS;
+		jbd_unlock_bh_state(bh);
+		jbd2_journal_abort(journal, err);
+		goto out;
+	}
 
-	J_ASSERT_JH(jh, jh->b_next_transaction == NULL);
 	J_ASSERT_JH(jh, buffer_locked(jh2bh(jh)));
 
 	if (jh->b_transaction == NULL) {
@@ -2522,7 +2531,8 @@ void jbd2_journal_refile_buffer(journal_t *journal, struct journal_head *jh)
 /*
  * File inode in the inode list of the handle's transaction
  */
-int jbd2_journal_file_inode(handle_t *handle, struct jbd2_inode *jinode)
+int jbd2_journal_file_inode(handle_t *handle, struct jbd2_inode *jinode,
+		loff_t start_byte, loff_t end_byte)
 {
 	transaction_t *transaction = handle->h_transaction;
 	journal_t *journal;
@@ -2533,23 +2543,6 @@ int jbd2_journal_file_inode(handle_t *handle, struct jbd2_inode *jinode)
 
 	jbd_debug(4, "Adding inode %lu, tid:%d\n", jinode->i_vfs_inode->i_ino,
 			transaction->t_tid);
-
-	/*
-	 * First check whether inode isn't already on the transaction's
-	 * lists without taking the lock. Note that this check is safe
-	 * without the lock as we cannot race with somebody removing inode
-	 * from the transaction. The reason is that we remove inode from the
-	 * transaction only in journal_release_jbd_inode() and when we commit
-	 * the transaction. We are guarded from the first case by holding
-	 * a reference to the inode. We are safe against the second case
-	 * because if jinode->i_transaction == transaction, commit code
-	 * cannot touch the transaction because we hold reference to it,
-	 * and if jinode->i_next_transaction == transaction, commit code
-	 * will only file the inode where we want it.
-	 */
-	if (jinode->i_transaction == transaction ||
-	    jinode->i_next_transaction == transaction)
-		return 0;
 
 	spin_lock(&journal->j_list_lock);
 
@@ -2578,6 +2571,23 @@ int jbd2_journal_file_inode(handle_t *handle, struct jbd2_inode *jinode)
 	jinode->i_transaction = transaction;
 	list_add(&jinode->i_list, &transaction->t_inode_list);
 done:
+	if (jinode->i_transaction == transaction) {
+		if (jinode->i_dirty_end) {
+			jinode->i_dirty_start = min(jinode->i_dirty_start, start_byte);
+			jinode->i_dirty_end = max(jinode->i_dirty_end, end_byte);
+		} else {
+			jinode->i_dirty_start = start_byte;
+			jinode->i_dirty_end = end_byte;
+		}
+	} else {
+		if (jinode->i_next_dirty_end) {
+			jinode->i_next_dirty_start = min(jinode->i_next_dirty_start, start_byte);
+			jinode->i_next_dirty_end = max(jinode->i_next_dirty_end, end_byte);
+		} else {
+			jinode->i_next_dirty_start = start_byte;
+			jinode->i_next_dirty_end = end_byte;
+		}
+	}
 	spin_unlock(&journal->j_list_lock);
 
 	return 0;

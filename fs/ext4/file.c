@@ -405,6 +405,11 @@ static int ext4_file_open(struct inode * inode, struct file * filp)
 		if (ext4_encryption_info(inode) == NULL)
 			return -ENOKEY;
 	}
+
+	ret = fsverity_file_open(inode, filp);
+	if (ret)
+		return ret;
+
 	/*
 	 * Set up the jbd2_inode if we are opening the inode for
 	 * writing and the journal is present
@@ -563,6 +568,12 @@ static loff_t ext4_seek_data(struct file *file, loff_t offset, loff_t maxsize)
 		mutex_unlock(&inode->i_mutex);
 		return -ENXIO;
 	}
+	/*
+	 * Make sure inline data cannot be created anymore since we are going
+	 * to allocate blocks for DIO. We know the inode does not have any
+	 * inline data now because ext4_dio_supported() checked for that.
+	 */
+	ext4_clear_inode_state(inode, EXT4_STATE_MAY_INLINE_DATA);
 
 	blkbits = inode->i_sb->s_blocksize_bits;
 	start = offset >> blkbits;

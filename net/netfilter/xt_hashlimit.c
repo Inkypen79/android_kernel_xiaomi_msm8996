@@ -226,9 +226,9 @@ static int htable_create(struct net *net, struct xt_hashlimit_mtinfo1 *minfo,
 	if (minfo->cfg.size) {
 		size = minfo->cfg.size;
 	} else {
-		size = (totalram_pages << PAGE_SHIFT) / 16384 /
+		size = (totalram_pages() << PAGE_SHIFT) / 16384 /
 		       sizeof(struct list_head);
-		if (totalram_pages > 1024 * 1024 * 1024 / PAGE_SIZE)
+		if (totalram_pages() > 1024 * 1024 * 1024 / PAGE_SIZE)
 			size = 8192;
 		if (size < 16)
 			size = 16;
@@ -680,22 +680,23 @@ static int hashlimit_mt_check(const struct xt_mtchk_param *par)
 	}
 
 	if (info->cfg.mode & ~XT_HASHLIMIT_ALL) {
-		pr_info("Unknown mode mask %X, kernel too old?\n",
-						info->cfg.mode);
+		pr_info_ratelimited("Unknown mode mask %X, kernel too old?\n",
+				    info->cfg.mode);
 		return -EINVAL;
 	}
 
 	/* Check for overflow. */
 	if (info->cfg.mode & XT_HASHLIMIT_BYTES) {
 		if (user2credits_byte(info->cfg.avg) == 0) {
-			pr_info("overflow, rate too high: %u\n", info->cfg.avg);
+			pr_info_ratelimited("overflow, rate too high: %u\n",
+					    info->cfg.avg);
 			return -EINVAL;
 		}
 	} else if (info->cfg.burst == 0 ||
 		    user2credits(info->cfg.avg * info->cfg.burst) <
 		    user2credits(info->cfg.avg)) {
-			pr_info("overflow, try lower: %u/%u\n",
-				info->cfg.avg, info->cfg.burst);
+			pr_info_ratelimited("overflow, try lower: %u/%u\n",
+				    info->cfg.avg, info->cfg.burst);
 			return -ERANGE;
 	}
 

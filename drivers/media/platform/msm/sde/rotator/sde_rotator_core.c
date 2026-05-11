@@ -996,7 +996,7 @@ static int sde_rotator_init_queue(struct sde_rot_mgr *mgr)
 		snprintf(name, sizeof(name), "rot_commitq_%d_%d",
 				mgr->device->id, i);
 		SDEROT_DBG("work queue name=%s\n", name);
-		init_kthread_worker(&mgr->commitq[i].rot_kw);
+		kthread_init_worker(&mgr->commitq[i].rot_kw);
 		mgr->commitq[i].rot_thread = kthread_run(kthread_worker_fn,
 				&mgr->commitq[i].rot_kw, name);
 		if (IS_ERR(mgr->commitq[i].rot_thread)) {
@@ -1027,7 +1027,7 @@ static int sde_rotator_init_queue(struct sde_rot_mgr *mgr)
 		snprintf(name, sizeof(name), "rot_doneq_%d_%d",
 				mgr->device->id, i);
 		SDEROT_DBG("work queue name=%s\n", name);
-		init_kthread_worker(&mgr->doneq[i].rot_kw);
+		kthread_init_worker(&mgr->doneq[i].rot_kw);
 		mgr->doneq[i].rot_thread = kthread_run(kthread_worker_fn,
 				&mgr->doneq[i].rot_kw, name);
 		if (IS_ERR(mgr->doneq[i].rot_thread)) {
@@ -1058,7 +1058,7 @@ static void sde_rotator_deinit_queue(struct sde_rot_mgr *mgr)
 	if (mgr->commitq) {
 		for (i = 0; i < mgr->queue_count; i++) {
 			if (mgr->commitq[i].rot_thread) {
-				flush_kthread_worker(&mgr->commitq[i].rot_kw);
+				kthread_flush_worker(&mgr->commitq[i].rot_kw);
 				kthread_stop(mgr->commitq[i].rot_thread);
 			}
 		}
@@ -1068,7 +1068,7 @@ static void sde_rotator_deinit_queue(struct sde_rot_mgr *mgr)
 	if (mgr->doneq) {
 		for (i = 0; i < mgr->queue_count; i++) {
 			if (mgr->doneq[i].rot_thread) {
-				flush_kthread_worker(&mgr->doneq[i].rot_kw);
+				kthread_flush_worker(&mgr->doneq[i].rot_kw);
 				kthread_stop(mgr->doneq[i].rot_thread);
 			}
 		}
@@ -1193,7 +1193,7 @@ void sde_rotator_queue_request(struct sde_rot_mgr *mgr,
 
 		if (entry->item.ts)
 			entry->item.ts[SDE_ROTATOR_TS_QUEUE] = ktime_get();
-		queue_kthread_work(&queue->rot_kw, &entry->commit_work);
+		kthread_queue_work(&queue->rot_kw, &entry->commit_work);
 	}
 }
 
@@ -1459,18 +1459,6 @@ static void sde_rotator_commit_handler(struct kthread_work *work)
 	if (entry->item.ts)
 		entry->item.ts[SDE_ROTATOR_TS_COMMIT] = ktime_get();
 
-	trace_rot_entry_commit(
-		entry->item.session_id, entry->item.sequence_id,
-		entry->item.wb_idx, entry->item.flags,
-		entry->item.input.format,
-		entry->item.input.width, entry->item.input.height,
-		entry->item.src_rect.x, entry->item.src_rect.y,
-		entry->item.src_rect.w, entry->item.src_rect.h,
-		entry->item.output.format,
-		entry->item.output.width, entry->item.output.height,
-		entry->item.dst_rect.x, entry->item.dst_rect.y,
-		entry->item.dst_rect.w, entry->item.dst_rect.h);
-
 	ATRACE_INT("sde_smmu_ctrl", 0);
 	ret = sde_smmu_ctrl(1);
 	if (IS_ERR_VALUE(ret)) {
@@ -1500,7 +1488,7 @@ static void sde_rotator_commit_handler(struct kthread_work *work)
 	if (entry->item.ts)
 		entry->item.ts[SDE_ROTATOR_TS_FLUSH] = ktime_get();
 
-	queue_kthread_work(&entry->doneq->rot_kw, &entry->done_work);
+	kthread_queue_work(&entry->doneq->rot_kw, &entry->done_work);
 	sde_rot_mgr_unlock(mgr);
 	return;
 error:
@@ -1513,7 +1501,7 @@ get_hw_res_err:
 	atomic_dec(&request->pending_count);
 	atomic_inc(&request->failed_count);
 	if (request->retire_kw && request->retire_work)
-		queue_kthread_work(request->retire_kw, request->retire_work);
+		kthread_queue_work(request->retire_kw, request->retire_work);
 	sde_rot_mgr_unlock(mgr);
 }
 
@@ -1567,18 +1555,6 @@ static void sde_rotator_done_handler(struct kthread_work *work)
 	if (entry->item.ts)
 		entry->item.ts[SDE_ROTATOR_TS_DONE] = ktime_get();
 
-	trace_rot_entry_done(
-		entry->item.session_id, entry->item.sequence_id,
-		entry->item.wb_idx, entry->item.flags,
-		entry->item.input.format,
-		entry->item.input.width, entry->item.input.height,
-		entry->item.src_rect.x, entry->item.src_rect.y,
-		entry->item.src_rect.w, entry->item.src_rect.h,
-		entry->item.output.format,
-		entry->item.output.width, entry->item.output.height,
-		entry->item.dst_rect.x, entry->item.dst_rect.y,
-		entry->item.dst_rect.w, entry->item.dst_rect.h);
-
 	sde_rot_mgr_lock(mgr);
 	sde_rotator_put_hw_resource(entry->commitq, entry, entry->commitq->hw);
 	sde_rotator_signal_output(entry);
@@ -1586,7 +1562,7 @@ static void sde_rotator_done_handler(struct kthread_work *work)
 	sde_rotator_release_entry(mgr, entry);
 	atomic_dec(&request->pending_count);
 	if (request->retire_kw && request->retire_work)
-		queue_kthread_work(request->retire_kw, request->retire_work);
+		kthread_queue_work(request->retire_kw, request->retire_work);
 	if (entry->item.ts)
 		entry->item.ts[SDE_ROTATOR_TS_RETIRE] = ktime_get();
 	sde_rot_mgr_unlock(mgr);
@@ -1952,9 +1928,9 @@ static int sde_rotator_add_request(struct sde_rot_mgr *mgr,
 
 		entry->request = req;
 
-		init_kthread_work(&entry->commit_work,
+		kthread_init_work(&entry->commit_work,
 				sde_rotator_commit_handler);
-		init_kthread_work(&entry->done_work,
+		kthread_init_work(&entry->done_work,
 				sde_rotator_done_handler);
 		SDEROT_DBG("Entry added. wbidx=%u, src{%u,%u,%u,%u}f=%u\n"
 			"dst{%u,%u,%u,%u}f=%u session_id=%u\n", item->wb_idx,
@@ -2004,9 +1980,9 @@ static void sde_rotator_cancel_request(struct sde_rot_mgr *mgr,
 		for (i = req->count - 1; i >= 0; i--) {
 			entry = req->entries + i;
 			if (entry->commitq)
-				flush_kthread_worker(&entry->commitq->rot_kw);
+				kthread_flush_worker(&entry->commitq->rot_kw);
 			if (entry->doneq)
-				flush_kthread_worker(&entry->doneq->rot_kw);
+				kthread_flush_worker(&entry->doneq->rot_kw);
 		}
 		sde_rot_mgr_lock(mgr);
 		SDEROT_DBG("cancel work done\n");

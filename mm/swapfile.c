@@ -719,6 +719,8 @@ start:
 			return swp_entry(si->type, offset);
 		pr_debug("scan_swap_map of si %d failed to find offset\n",
 		       si->type);
+		cond_resched();
+
 		spin_lock(&swap_avail_lock);
 nextsi:
 		/*
@@ -1781,6 +1783,7 @@ add_swap_extent(struct swap_info_struct *sis, unsigned long start_page,
 	list_add_tail(&new_se->list, &sis->first_swap_extent.list);
 	return 1;
 }
+EXPORT_SYMBOL_GPL(add_swap_extent);
 
 /*
  * A `swap extent' is a simple thing which maps a contiguous range of pages

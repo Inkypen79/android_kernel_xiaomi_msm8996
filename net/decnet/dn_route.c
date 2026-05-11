@@ -303,10 +303,9 @@ static struct dst_entry *dn_dst_check(struct dst_entry *dst, __u32 cookie)
 	return NULL;
 }
 
-static struct dst_entry *dn_dst_negative_advice(struct dst_entry *dst)
+static void dn_dst_negative_advice(struct sock *sk, struct dst_entry *dst)
 {
-	dst_release(dst);
-	return NULL;
+	sk_dst_reset(sk);
 }
 
 static void dn_dst_link_failure(struct sk_buff *skb)
@@ -1877,7 +1876,7 @@ void __init dn_route_init(void)
 	dn_route_timer.expires = jiffies + decnet_dst_gc_interval * HZ;
 	add_timer(&dn_route_timer);
 
-	goal = totalram_pages >> (26 - PAGE_SHIFT);
+	goal = totalram_pages() >> (26 - PAGE_SHIFT);
 
 	for(order = 0; (1UL << order) < goal; order++)
 		/* NOTHING */;
