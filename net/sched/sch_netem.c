@@ -149,12 +149,6 @@ struct netem_skb_cb {
 	ktime_t		tstamp_save;
 };
 
-
-static struct sk_buff *netem_rb_to_skb(struct rb_node *rb)
-{
-	return container_of(rb, struct sk_buff, rbnode);
-}
-
 static inline struct netem_skb_cb *netem_skb_cb(struct sk_buff *skb)
 {
 	/* we assume we can use skb next/prev/tstamp as storage for rb_node */
@@ -365,7 +359,7 @@ static void tfifo_reset(struct Qdisc *sch)
 	struct rb_node *p;
 
 	while ((p = rb_first(&q->t_root))) {
-		struct sk_buff *skb = netem_rb_to_skb(p);
+		struct sk_buff *skb = rb_to_skb(p);
 
 		rb_erase(p, &q->t_root);
 		skb->next = NULL;
@@ -384,7 +378,7 @@ static void tfifo_enqueue(struct sk_buff *nskb, struct Qdisc *sch)
 		struct sk_buff *skb;
 
 		parent = *p;
-		skb = netem_rb_to_skb(parent);
+		skb = rb_to_skb(parent);
 		if (tnext >= netem_skb_cb(skb)->time_to_send)
 			p = &parent->rb_right;
 		else
@@ -524,7 +518,7 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			if (!skb_queue_empty(&sch->q))
 				last = skb_peek_tail(&sch->q);
 			else
-				last = netem_rb_to_skb(rb_last(&q->t_root));
+				last = skb_rb_last(&q->t_root);
 			if (last) {
 				/*
 				 * Last packet in queue is reference point (now),
@@ -590,7 +584,7 @@ static unsigned int netem_drop(struct Qdisc *sch)
 		struct rb_node *p = rb_first(&q->t_root);
 
 		if (p) {
-			struct sk_buff *skb = netem_rb_to_skb(p);
+			struct sk_buff *skb = rb_to_skb(p);
 
 			rb_erase(p, &q->t_root);
 			sch->q.qlen--;
@@ -630,7 +624,7 @@ deliver:
 	if (p) {
 		psched_time_t time_to_send;
 
-		skb = netem_rb_to_skb(p);
+		skb = rb_to_skb(p);
 
 		/* if more time remaining? */
 		time_to_send = netem_skb_cb(skb)->time_to_send;
@@ -656,11 +650,10 @@ deliver:
 				unsigned int pkt_len = qdisc_pkt_len(skb);
 				int err = qdisc_enqueue(skb, q->qdisc);
 
-				if (err != NET_XMIT_SUCCESS &&
-				    net_xmit_drop_count(err)) {
-					qdisc_qstats_drop(sch);
-					qdisc_tree_reduce_backlog(sch, 1,
-								  pkt_len);
+				if (err != NET_XMIT_SUCCESS) {
+					if (net_xmit_drop_count(err))
+						qdisc_qstats_drop(sch);
+					qdisc_tree_reduce_backlog(sch, 1, pkt_len);
 				}
 				goto tfifo_dequeue;
 			}
@@ -876,6 +869,7 @@ static int netem_change(struct Qdisc *sch, struct nlattr *opt)
 	if (ret < 0)
 		return ret;
 
+	sch_tree_lock(sch);
 	/* backup q->clg and q->loss_model */
 	old_clg = q->clg;
 	old_loss_model = q->loss_model;
@@ -884,7 +878,7 @@ static int netem_change(struct Qdisc *sch, struct nlattr *opt)
 		ret = get_loss_clg(q, tb[TCA_NETEM_LOSS]);
 		if (ret) {
 			q->loss_model = old_loss_model;
-			return ret;
+			goto unlock;
 		}
 	} else {
 		q->loss_model = CLG_RANDOM;
@@ -899,7 +893,7 @@ static int netem_change(struct Qdisc *sch, struct nlattr *opt)
 			 */
 			q->clg = old_clg;
 			q->loss_model = old_loss_model;
-			return ret;
+			goto unlock;
 		}
 	}
 
@@ -938,6 +932,8 @@ static int netem_change(struct Qdisc *sch, struct nlattr *opt)
 	if (tb[TCA_NETEM_ECN])
 		q->ecn = nla_get_u32(tb[TCA_NETEM_ECN]);
 
+unlock:
+	sch_tree_unlock(sch);
 	return ret;
 }
 

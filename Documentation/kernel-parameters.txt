@@ -593,16 +593,30 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 	ccw_timeout_log [S390]
 			See Documentation/s390/CommonIO for details.
 
-	cgroup_disable= [KNL] Disable a particular controller
-			Format: {name of the controller(s) to disable}
+	cgroup_disable=	[KNL] Disable a particular controller or optional feature
+			Format: {name of the controller(s) or feature(s) to disable}
 			The effects of cgroup_disable=foo are:
 			- foo isn't auto-mounted if you mount all cgroups in
 			  a single hierarchy
 			- foo isn't visible as an individually mountable
 			  subsystem
+			- if foo is an optional feature then the feature is
+			  disabled and corresponding cgroup files are not
+			  created
 			{Currently only "memory" controller deal with this and
 			cut the overhead, others just disable the usage. So
 			only cgroup_disable=memory is actually worthy}
+			Specifying "pressure" disables per-cgroup pressure
+			stall information accounting feature
+
+	cgroup_no_v1=	[KNL] Disable cgroup controllers and named hierarchies in v1
+			Format: { { controller | "all" | "named" }
+			          [,{ controller | "all" | "named" }...] }
+			Like cgroup_disable, but only applies to cgroup v1;
+			the blacklisted controllers remain available in cgroup2.
+			"all" blacklists all controllers and "named" disables
+			named mounts. Specifying both "all" and "named" disables
+			all v1 hierarchies.
 
 	checkreqprot	[SELINUX] Set initial checkreqprot flag value.
 			Format: { "0" | "1" }
@@ -3182,6 +3196,10 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			before loading.
 			See Documentation/blockdev/ramdisk.txt.
 
+	psi=		[KNL] Enable or disable pressure stall information
+			tracking.
+			Format: <bool>
+
 	psmouse.proto=	[HW,MOUSE] Highest PS2 mouse protocol extension to
 			probe for; one of (bare|imps|exps|lifebook|any).
 	psmouse.rate=	[HW,MOUSE] Set desired mouse report rate, in reports
@@ -3778,8 +3796,12 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			Specific mitigations can also be selected manually:
 
 			retpoline	  - replace indirect branches
-			retpoline,generic - google's original retpoline
-			retpoline,amd     - AMD-specific minimal thunk
+			retpoline,generic - Retpolines
+			retpoline,lfence  - LFENCE; indirect branch
+			retpoline,amd     - alias for retpoline,lfence
+			eibrs		  - enhanced IBRS
+			eibrs,retpoline   - enhanced IBRS + Retpolines
+			eibrs,lfence      - enhanced IBRS + LFENCE
 
 			Not specifying this option is equivalent to
 			spectre_v2=auto.

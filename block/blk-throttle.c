@@ -221,10 +221,8 @@ static struct throtl_data *sq_to_td(struct throtl_service_queue *sq)
 									\
 	(void)__td;							\
 	if ((__tg)) {							\
-		char __pbuf[128];					\
-									\
-		blkg_path(tg_to_blkg(__tg), __pbuf, sizeof(__pbuf));	\
-		blk_add_trace_msg(__td->queue, "throtl %s " fmt, __pbuf, ##args); \
+		blk_add_cgroup_trace_msg(__td->queue,			\
+			tg_to_blkg(__tg)->blkcg, "throtl " fmt, ##args);\
 	} else {							\
 		blk_add_trace_msg(__td->queue, "throtl " fmt, ##args);	\
 	}								\
@@ -1166,6 +1164,7 @@ static void tg_conf_updated(struct throtl_grp *tg)
 		   tg->bps[READ], tg->bps[WRITE],
 		   tg->iops[READ], tg->iops[WRITE]);
 
+	rcu_read_lock();
 	/*
 	 * Update has_rules[] flags for the updated tg's subtree.  A tg is
 	 * considered to have rules if either the tg itself or any of its
@@ -1175,6 +1174,7 @@ static void tg_conf_updated(struct throtl_grp *tg)
 	 */
 	blkg_for_each_descendant_pre(blkg, pos_css, tg_to_blkg(tg))
 		tg_update_has_rules(blkg_to_tg(blkg));
+	rcu_read_unlock();
 
 	/*
 	 * We're already holding queue_lock and know @tg is valid.  Let's
@@ -1470,7 +1470,6 @@ bool blk_throtl_bio(struct request_queue *q, struct blkcg_gq *blkg,
 		   tg->io_disp[rw], tg->iops[rw],
 		   sq->nr_queued[READ], sq->nr_queued[WRITE]);
 
-	bio_associate_current(bio);
 	tg->td->nr_queued[rw]++;
 	throtl_add_bio_tg(bio, qn, tg);
 	throttled = true;

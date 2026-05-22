@@ -1625,7 +1625,7 @@ static int fcoe_xmit(struct fc_lport *lport, struct fc_frame *fp)
 
 	/* crc offload */
 	if (likely(lport->crc_offload)) {
-		skb->ip_summed = CHECKSUM_UNNECESSARY;
+		skb->ip_summed = CHECKSUM_PARTIAL;
 		skb->csum_start = skb_headroom(skb);
 		skb->csum_offset = skb->len;
 		crc = 0;
@@ -2659,6 +2659,7 @@ out_free:
 	cpu_notifier_register_done();
 
 	mutex_unlock(&fcoe_config_mutex);
+	fcoe_transport_detach(&fcoe_sw_transport);
 	destroy_workqueue(fcoe_wq);
 	return rc;
 }

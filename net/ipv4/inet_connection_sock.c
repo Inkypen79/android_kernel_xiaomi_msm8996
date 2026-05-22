@@ -25,11 +25,21 @@
 #include <net/xfrm.h>
 #include <net/tcp.h>
 #include <net/sock_reuseport.h>
+#include <net/addrconf.h>
 
 #ifdef INET_CSK_DEBUG
 const char inet_csk_timer_bug_msg[] = "inet_csk BUG: unknown timer value\n";
 EXPORT_SYMBOL(inet_csk_timer_bug_msg);
 #endif
+
+int inet_rcv_saddr_any(const struct sock *sk)
+{
+#if IS_ENABLED(CONFIG_IPV6)
+	if (sk->sk_family == AF_INET6)
+		return ipv6_addr_any(&sk->sk_v6_rcv_saddr);
+#endif
+	return !sk->sk_rcv_saddr;
+}
 
 void inet_get_local_port_range(struct net *net, int *low, int *high)
 {
@@ -323,7 +333,7 @@ static int inet_csk_wait_for_connect(struct sock *sk, long timeo)
 /*
  * This will accept the next outstanding connection.
  */
-struct sock *inet_csk_accept(struct sock *sk, int flags, int *err)
+struct sock *inet_csk_accept(struct sock *sk, int flags, int *err, bool kern)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct request_sock_queue *queue = &icsk->icsk_accept_queue;
@@ -666,6 +676,18 @@ void inet_csk_reqsk_queue_hash_add(struct sock *sk, struct request_sock *req,
 }
 EXPORT_SYMBOL_GPL(inet_csk_reqsk_queue_hash_add);
 
+static void inet_clone_ulp(const struct request_sock *req, struct sock *newsk,
+			   const gfp_t priority)
+{
+	struct inet_connection_sock *icsk = inet_csk(newsk);
+
+	if (!icsk->icsk_ulp_ops)
+		return;
+
+	if (icsk->icsk_ulp_ops->clone)
+		icsk->icsk_ulp_ops->clone(req, newsk, priority);
+}
+
 /**
  *	inet_csk_clone_lock - clone an inet socket, and lock its clone
  *	@sk: the socket to clone
@@ -693,6 +715,9 @@ struct sock *inet_csk_clone_lock(const struct sock *sk,
 
 		inet_sk(newsk)->mc_list = NULL;
 
+		/* listeners have SOCK_RCU_FREE, not the children */
+		sock_reset_flag(newsk, SOCK_RCU_FREE);
+
 		newsk->sk_mark = inet_rsk(req)->ir_mark;
 		atomic64_set(&newsk->sk_cookie,
 			     atomic64_read(&inet_rsk(req)->ir_cookie));
@@ -703,6 +728,8 @@ struct sock *inet_csk_clone_lock(const struct sock *sk,
 
 		/* Deinitialize accept_queue to trap illegal accesses. */
 		memset(&newicsk->icsk_accept_queue, 0, sizeof(newicsk->icsk_accept_queue));
+
+		inet_clone_ulp(req, newsk, priority);
 
 		security_inet_csk_clone(newsk, req);
 	}
@@ -757,11 +784,25 @@ void inet_csk_prepare_forced_close(struct sock *sk)
 }
 EXPORT_SYMBOL(inet_csk_prepare_forced_close);
 
+static int inet_ulp_can_listen(const struct sock *sk)
+{
+	const struct inet_connection_sock *icsk = inet_csk(sk);
+
+	if (icsk->icsk_ulp_ops && !icsk->icsk_ulp_ops->clone)
+		return -EINVAL;
+
+	return 0;
+}
+
 int inet_csk_listen_start(struct sock *sk, int backlog)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct inet_sock *inet = inet_sk(sk);
 	int err = -EADDRINUSE;
+
+	err = inet_ulp_can_listen(sk);
+	if (unlikely(err))
+		return err;
 
 	reqsk_queue_alloc(&icsk->icsk_accept_queue);
 

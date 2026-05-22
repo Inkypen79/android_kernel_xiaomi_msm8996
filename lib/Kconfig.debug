@@ -167,6 +167,14 @@ config DEBUG_INFO_DWARF4
 	  But it significantly improves the success of resolving
 	  variables in gdb on optimized code.
 
+config DEBUG_INFO_BTF
+	bool "Generate BTF typeinfo"
+	depends on DEBUG_INFO
+	help
+	  Generate deduplicated BTF type information from DWARF debug info.
+	  Turning this on expects presence of pahole tool, which will convert
+	  DWARF type info into equivalent deduplicated BTF type info.
+
 config GDB_SCRIPTS
 	bool "Provide GDB scripts for kernel debugging"
 	depends on DEBUG_INFO
@@ -309,11 +317,11 @@ config DEBUG_SECTION_MISMATCH
 	    the analysis would not catch the illegal reference.
 	    This option tells gcc to inline less (but it does result in
 	    a larger kernel).
-	  - Run the section mismatch analysis for each module/built-in.o file.
+	  - Run the section mismatch analysis for each module/built-in.a file.
 	    When we run the section mismatch analysis on vmlinux.o, we
 	    lose valueble information about where the mismatch was
 	    introduced.
-	    Running the analysis for each module/built-in.o file
+	    Running the analysis for each module/built-in.a file
 	    tells where the mismatch happens much closer to the
 	    source. The drawback is that the same mismatch is
 	    reported at least twice.
@@ -1318,6 +1326,17 @@ menu "RCU Debugging"
 config PROVE_RCU
 	def_bool PROVE_LOCKING
 
+config PROVE_RCU_LIST
+	bool "RCU list lockdep debugging"
+	depends on PROVE_RCU && RCU_EXPERT
+	default n
+	help
+	  Enable RCU lockdep checking for list usages. By default it is
+	  turned off since there are several list RCU users that still
+	  need to be converted to pass a lockdep expression. To prevent
+	  false-positive splats, we keep it default disabled but once all
+	  users are converted, we can remove this config option.
+
 config PROVE_RCU_REPEATEDLY
 	bool "RCU debugging: don't disable PROVE_RCU on first splat"
 	depends on PROVE_RCU
@@ -2043,4 +2062,3 @@ source "samples/Kconfig"
 source "lib/Kconfig.kgdb"
 
 source "lib/Kconfig.ubsan"
-

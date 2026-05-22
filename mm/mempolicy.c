@@ -97,7 +97,6 @@
 
 #include <asm/tlbflush.h>
 #include <asm/uaccess.h>
-#include <linux/random.h>
 
 #include "internal.h"
 
@@ -347,9 +346,7 @@ static void mpol_rebind_nodemask(struct mempolicy *pol, const nodemask_t *nodes,
 		BUG();
 
 	if (!node_isset(current->il_next, tmp)) {
-		current->il_next = next_node(current->il_next, tmp);
-		if (current->il_next >= MAX_NUMNODES)
-			current->il_next = first_node(tmp);
+		current->il_next = next_node_in(current->il_next, tmp);
 		if (current->il_next >= MAX_NUMNODES)
 			current->il_next = numa_node_id();
 	}
@@ -399,7 +396,7 @@ static void mpol_rebind_preferred(struct mempolicy *pol,
 static void mpol_rebind_policy(struct mempolicy *pol, const nodemask_t *newmask,
 				enum mpol_rebind_step step)
 {
-	if (!pol)
+	if (!pol || pol->mode == MPOL_LOCAL)
 		return;
 	if (!mpol_store_user_nodemask(pol) && step == MPOL_REBIND_ONCE &&
 	    nodes_equal(pol->w.cpuset_mems_allowed, *newmask))
@@ -548,7 +545,8 @@ static int queue_pages_hugetlb(pte_t *pte, unsigned long hmask,
 		goto unlock;
 	/* With MPOL_MF_MOVE, we migrate only unshared hugepage. */
 	if (flags & (MPOL_MF_MOVE_ALL) ||
-	    (flags & MPOL_MF_MOVE && page_mapcount(page) == 1))
+	    (flags & MPOL_MF_MOVE && page_mapcount(page) == 1 &&
+	     !hugetlb_pmd_shared(pte)))
 		isolate_huge_page(page, qp->pagelist);
 unlock:
 	spin_unlock(ptl);
@@ -696,7 +694,6 @@ static int vma_replace_policy(struct vm_area_struct *vma,
 static int mbind_range(struct mm_struct *mm, unsigned long start,
 		       unsigned long end, struct mempolicy *new_pol)
 {
-	struct vm_area_struct *next;
 	struct vm_area_struct *prev;
 	struct vm_area_struct *vma;
 	int err = 0;
@@ -712,8 +709,7 @@ static int mbind_range(struct mm_struct *mm, unsigned long start,
 	if (start > vma->vm_start)
 		prev = vma;
 
-	for (; vma && vma->vm_start < end; prev = vma, vma = next) {
-		next = vma->vm_next;
+	for (; vma && vma->vm_start < end; prev = vma, vma = vma->vm_next) {
 		vmstart = max(start, vma->vm_start);
 		vmend   = min(end, vma->vm_end);
 
@@ -728,10 +724,6 @@ static int mbind_range(struct mm_struct *mm, unsigned long start,
 				 vma_get_anon_name(vma));
 		if (prev) {
 			vma = prev;
-			next = vma->vm_next;
-			if (mpol_equal(vma_policy(vma), new_pol))
-				continue;
-			/* vma_merge() joined vma && vma->next, case 8 */
 			goto replace;
 		}
 		if (vma->vm_start != vmstart) {
@@ -1693,9 +1685,7 @@ static unsigned interleave_nodes(struct mempolicy *policy)
 	struct task_struct *me = current;
 
 	nid = me->il_next;
-	next = next_node(nid, policy->v.nodes);
-	if (next >= MAX_NUMNODES)
-		next = first_node(policy->v.nodes);
+	next = next_node_in(nid, policy->v.nodes);
 	if (next < MAX_NUMNODES)
 		me->il_next = next;
 	return nid;
@@ -1787,21 +1777,6 @@ static inline unsigned interleave_nid(struct mempolicy *pol,
 		return offset_il_node(pol, vma, off);
 	} else
 		return interleave_nodes(pol);
-}
-
-/*
- * Return the bit number of a random bit set in the nodemask.
- * (returns NUMA_NO_NODE if nodemask is empty)
- */
-int node_random(const nodemask_t *maskp)
-{
-	int w, bit = NUMA_NO_NODE;
-
-	w = nodes_weight(*maskp);
-	if (w)
-		bit = bitmap_ord_to_pos(maskp->bits,
-			get_random_int() % w, MAX_NUMNODES);
-	return bit;
 }
 
 #ifdef CONFIG_HUGETLBFS
@@ -2190,12 +2165,14 @@ bool __mpol_equal(struct mempolicy *a, struct mempolicy *b)
  *
  * Remember policies even when nobody has shared memory mapped.
  * The policies are kept in Red-Black tree linked from the inode.
- * They are protected by the sp->lock spinlock, which should be held
+ * They are protected by the sp->lock rwlock, which should be held
  * for any accesses to the tree.
  */
 
-/* lookup first element intersecting start-end */
-/* Caller holds sp->lock */
+/*
+ * lookup first element intersecting start-end.  Caller holds sp->lock for
+ * reading or for writing
+ */
 static struct sp_node *
 sp_lookup(struct shared_policy *sp, unsigned long start, unsigned long end)
 {
@@ -2226,8 +2203,10 @@ sp_lookup(struct shared_policy *sp, unsigned long start, unsigned long end)
 	return rb_entry(n, struct sp_node, nd);
 }
 
-/* Insert a new shared policy into the list. */
-/* Caller holds sp->lock */
+/*
+ * Insert a new shared policy into the list.  Caller holds sp->lock for
+ * writing.
+ */
 static void sp_insert(struct shared_policy *sp, struct sp_node *new)
 {
 	struct rb_node **p = &sp->root.rb_node;
@@ -2259,13 +2238,13 @@ mpol_shared_policy_lookup(struct shared_policy *sp, unsigned long idx)
 
 	if (!sp->root.rb_node)
 		return NULL;
-	spin_lock(&sp->lock);
+	read_lock(&sp->lock);
 	sn = sp_lookup(sp, idx, idx+1);
 	if (sn) {
 		mpol_get(sn->policy);
 		pol = sn->policy;
 	}
-	spin_unlock(&sp->lock);
+	read_unlock(&sp->lock);
 	return pol;
 }
 
@@ -2408,7 +2387,7 @@ static int shared_policy_replace(struct shared_policy *sp, unsigned long start,
 	int ret = 0;
 
 restart:
-	spin_lock(&sp->lock);
+	write_lock(&sp->lock);
 	n = sp_lookup(sp, start, end);
 	/* Take care of old policies in the same range. */
 	while (n && n->start < end) {
@@ -2441,7 +2420,7 @@ restart:
 	}
 	if (new)
 		sp_insert(sp, new);
-	spin_unlock(&sp->lock);
+	write_unlock(&sp->lock);
 	ret = 0;
 
 err_out:
@@ -2453,7 +2432,7 @@ err_out:
 	return ret;
 
 alloc_new:
-	spin_unlock(&sp->lock);
+	write_unlock(&sp->lock);
 	ret = -ENOMEM;
 	n_new = kmem_cache_alloc(sn_cache, GFP_KERNEL);
 	if (!n_new)
@@ -2461,6 +2440,7 @@ alloc_new:
 	mpol_new = kmem_cache_alloc(policy_cache, GFP_KERNEL);
 	if (!mpol_new)
 		goto err_out;
+	atomic_set(&mpol_new->refcnt, 1);
 	goto restart;
 }
 
@@ -2479,7 +2459,7 @@ void mpol_shared_policy_init(struct shared_policy *sp, struct mempolicy *mpol)
 	int ret;
 
 	sp->root = RB_ROOT;		/* empty tree == default mempolicy */
-	spin_lock_init(&sp->lock);
+	rwlock_init(&sp->lock);
 
 	if (mpol) {
 		struct vm_area_struct pvma;
@@ -2545,14 +2525,14 @@ void mpol_free_shared_policy(struct shared_policy *p)
 
 	if (!p->root.rb_node)
 		return;
-	spin_lock(&p->lock);
+	write_lock(&p->lock);
 	next = rb_first(&p->root);
 	while (next) {
 		n = rb_entry(next, struct sp_node, nd);
 		next = rb_next(&n->nd);
 		sp_delete(p, n);
 	}
-	spin_unlock(&p->lock);
+	write_unlock(&p->lock);
 }
 
 #ifdef CONFIG_NUMA_BALANCING

@@ -639,7 +639,7 @@ static int do_dccp_getsockopt(struct sock *sk, int level, int optname,
 		return dccp_getsockopt_service(sk, len,
 					       (__be32 __user *)optval, optlen);
 	case DCCP_SOCKOPT_GET_CUR_MPS:
-		val = dp->dccps_mss_cache;
+		val = READ_ONCE(dp->dccps_mss_cache);
 		break;
 	case DCCP_SOCKOPT_AVAILABLE_CCIDS:
 		return ccid_getsockopt_builtin_ccids(sk, len, optval, optlen);
@@ -759,7 +759,7 @@ int dccp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	int rc, size;
 	long timeo;
 
-	if (len > dp->dccps_mss_cache)
+	if (len > READ_ONCE(dp->dccps_mss_cache))
 		return -EMSGSIZE;
 
 	lock_sock(sk);
@@ -789,6 +789,12 @@ int dccp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 
 	if (sk->sk_state == DCCP_CLOSED) {
 		rc = -ENOTCONN;
+		goto out_discard;
+	}
+
+	/* We need to check dccps_mss_cache after socket is locked. */
+	if (len > dp->dccps_mss_cache) {
+		rc = -EMSGSIZE;
 		goto out_discard;
 	}
 
@@ -1149,10 +1155,10 @@ static int __init dccp_init(void)
 	 *
 	 * The methodology is similar to that of the buffer cache.
 	 */
-	if (totalram_pages >= (128 * 1024))
-		goal = totalram_pages >> (21 - PAGE_SHIFT);
+	if (totalram_pages() >= (128 * 1024))
+		goal = totalram_pages() >> (21 - PAGE_SHIFT);
 	else
-		goal = totalram_pages >> (23 - PAGE_SHIFT);
+		goal = totalram_pages() >> (23 - PAGE_SHIFT);
 
 	if (thash_entries)
 		goal = (thash_entries *

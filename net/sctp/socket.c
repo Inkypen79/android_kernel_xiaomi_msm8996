@@ -357,9 +357,9 @@ static void sctp_auto_asconf_init(struct sctp_sock *sp)
 	struct net *net = sock_net(&sp->inet.sk);
 
 	if (net->sctp.default_auto_asconf) {
-		spin_lock(&net->sctp.addr_wq_lock);
+		spin_lock_bh(&net->sctp.addr_wq_lock);
 		list_add_tail(&sp->auto_asconf_list, &net->sctp.auto_asconf_splist);
-		spin_unlock(&net->sctp.addr_wq_lock);
+		spin_unlock_bh(&net->sctp.addr_wq_lock);
 		sp->do_auto_asconf = 1;
 	}
 }
@@ -3952,7 +3952,7 @@ static int sctp_disconnect(struct sock *sk, int flags)
  * descriptor will be returned from accept() to represent the newly
  * formed association.
  */
-static struct sock *sctp_accept(struct sock *sk, int flags, int *err)
+static struct sock *sctp_accept(struct sock *sk, int flags, int *err, bool kern)
 {
 	struct sctp_sock *sp;
 	struct sctp_endpoint *ep;
@@ -3987,7 +3987,7 @@ static struct sock *sctp_accept(struct sock *sk, int flags, int *err)
 	 */
 	asoc = list_entry(ep->asocs.next, struct sctp_association, asocs);
 
-	newsk = sp->pf->create_accept_sk(sk, asoc);
+	newsk = sp->pf->create_accept_sk(sk, asoc, kern);
 	if (!newsk) {
 		error = -ENOMEM;
 		goto out;
@@ -6171,6 +6171,22 @@ static int sctp_getsockopt(struct sock *sk, int level, int optname,
 	return retval;
 }
 
+static bool sctp_bpf_bypass_getsockopt(int level, int optname)
+{
+	if (level == SOL_SCTP) {
+		switch (optname) {
+		case SCTP_SOCKOPT_PEELOFF:
+		case SCTP_SOCKOPT_PEELOFF_FLAGS:
+		case SCTP_SOCKOPT_CONNECTX3:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	return false;
+}
+
 static int sctp_hash(struct sock *sk)
 {
 	/* STUB */
@@ -6394,8 +6410,10 @@ static int sctp_listen_start(struct sock *sk, int backlog)
 	 */
 	sk->sk_state = SCTP_SS_LISTENING;
 	if (!ep->base.bind_addr.port) {
-		if (sctp_autobind(sk))
+		if (sctp_autobind(sk)) {
+			sk->sk_state = SCTP_SS_CLOSED;
 			return -EAGAIN;
+		}
 	} else {
 		if (sctp_get_port(sk, inet_sk(sk)->inet_num)) {
 			sk->sk_state = SCTP_SS_CLOSED;
@@ -7441,6 +7459,7 @@ struct proto sctp_prot = {
 	.shutdown    =	sctp_shutdown,
 	.setsockopt  =	sctp_setsockopt,
 	.getsockopt  =	sctp_getsockopt,
+	.bpf_bypass_getsockopt	= sctp_bpf_bypass_getsockopt,
 	.sendmsg     =	sctp_sendmsg,
 	.recvmsg     =	sctp_recvmsg,
 	.bind        =	sctp_bind,
@@ -7479,6 +7498,7 @@ struct proto sctpv6_prot = {
 	.shutdown	= sctp_shutdown,
 	.setsockopt	= sctp_setsockopt,
 	.getsockopt	= sctp_getsockopt,
+	.bpf_bypass_getsockopt	= sctp_bpf_bypass_getsockopt,
 	.sendmsg	= sctp_sendmsg,
 	.recvmsg	= sctp_recvmsg,
 	.bind		= sctp_bind,

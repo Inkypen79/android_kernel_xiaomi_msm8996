@@ -1,5 +1,9 @@
-#ifndef _SCHED_SYSCTL_H
-#define _SCHED_SYSCTL_H
+#ifndef _LINUX_SCHED_SYSCTL_H
+#define _LINUX_SCHED_SYSCTL_H
+
+#include <linux/types.h>
+
+struct ctl_table;
 
 #ifdef CONFIG_DETECT_HUNG_TASK
 extern int	     sysctl_hung_task_check_count;
@@ -142,6 +146,12 @@ extern int sched_window_update_handler(struct ctl_table *table,
 extern unsigned int sysctl_sched_rt_period;
 extern int sysctl_sched_rt_runtime;
 
+#ifdef CONFIG_UCLAMP_TASK
+extern unsigned int sysctl_sched_uclamp_util_min;
+extern unsigned int sysctl_sched_uclamp_util_max;
+extern unsigned int sysctl_sched_uclamp_util_min_rt_default;
+#endif
+
 #ifdef CONFIG_CFS_BANDWIDTH
 extern unsigned int sysctl_sched_cfs_bandwidth_slice;
 #endif
@@ -177,8 +187,20 @@ extern int sched_rt_handler(struct ctl_table *table, int write,
 		void __user *buffer, size_t *lenp,
 		loff_t *ppos);
 
+#ifdef CONFIG_UCLAMP_TASK
+extern int sysctl_sched_uclamp_handler(struct ctl_table *table, int write,
+				       void __user *buffer, size_t *lenp,
+				       loff_t *ppos);
+#endif
+
 extern int sysctl_numa_balancing(struct ctl_table *table, int write,
 				 void __user *buffer, size_t *lenp,
 				 loff_t *ppos);
 
-#endif /* _SCHED_SYSCTL_H */
+
+#define LIB_PATH_LENGTH 512
+extern char sched_lib_name[LIB_PATH_LENGTH];
+extern unsigned int sched_lib_mask_force;
+extern bool is_sched_lib_based_app(pid_t pid);
+
+#endif /* _LINUX_SCHED_SYSCTL_H */

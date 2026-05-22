@@ -230,14 +230,16 @@ static int xenvif_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	cb = XENVIF_RX_CB(skb);
 	cb->expires = jiffies + vif->drain_timeout;
 
-	xenvif_rx_queue_tail(queue, skb);
+	if (!xenvif_rx_queue_tail(queue, skb))
+		goto drop;
+
 	xenvif_kick_thread(queue);
 
 	return NETDEV_TX_OK;
 
  drop:
 	vif->dev->stats.tx_dropped++;
-	dev_kfree_skb(skb);
+	dev_kfree_skb_any(skb);
 	return NETDEV_TX_OK;
 }
 
@@ -556,8 +558,8 @@ int xenvif_init_queue(struct xenvif_queue *queue)
 	for (i = 0; i < MAX_PENDING_REQS; i++) {
 		queue->pending_tx_info[i].callback_struct = (struct ubuf_info)
 			{ .callback = xenvif_zerocopy_callback,
-			  .ctx = NULL,
-			  .desc = i };
+			  { { .ctx = NULL,
+			      .desc = i } } };
 		queue->grant_tx_handle[i] = NETBACK_INVALID_HANDLE;
 	}
 

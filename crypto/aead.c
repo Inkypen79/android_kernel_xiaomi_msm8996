@@ -24,6 +24,7 @@
 #include <linux/slab.h>
 #include <linux/seq_file.h>
 #include <linux/cryptouser.h>
+#include <linux/compiler.h>
 #include <net/netlink.h>
 
 #include "internal.h"
@@ -44,8 +45,7 @@ static int setkey_unaligned(struct crypto_aead *tfm, const u8 *key,
 	alignbuffer = (u8 *)ALIGN((unsigned long)buffer, alignmask + 1);
 	memcpy(alignbuffer, key, keylen);
 	ret = crypto_aead_alg(tfm)->setkey(tfm, alignbuffer, keylen);
-	memset(alignbuffer, 0, keylen);
-	kfree(buffer);
+	kzfree(buffer);
 	return ret;
 }
 
@@ -132,7 +132,7 @@ static int crypto_aead_report(struct sk_buff *skb, struct crypto_alg *alg)
 #endif
 
 static void crypto_aead_show(struct seq_file *m, struct crypto_alg *alg)
-	__attribute__ ((unused));
+	__maybe_unused;
 static void crypto_aead_show(struct seq_file *m, struct crypto_alg *alg)
 {
 	struct aead_alg *aead = container_of(alg, struct aead_alg, base);

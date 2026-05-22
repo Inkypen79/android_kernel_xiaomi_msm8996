@@ -11,13 +11,17 @@
 
 #include <linux/types.h>
 
-#define UFFD_API ((__u64)0xAA)
 /*
- * After implementing the respective features it will become:
- * #define UFFD_API_FEATURES (UFFD_FEATURE_PAGEFAULT_FLAG_WP | \
- *			      UFFD_FEATURE_EVENT_FORK)
+ * If the UFFDIO_API is upgraded someday, the UFFDIO_UNREGISTER and
+ * UFFDIO_WAKE ioctls should be defined as _IOW and not as _IOR.  In
+ * userfaultfd.h we assumed the kernel was reading (instead _IOC_READ
+ * means the userland is reading).
  */
-#define UFFD_API_FEATURES (0)
+#define UFFD_API ((__u64)0xAA)
+#define UFFD_API_FEATURES (UFFD_FEATURE_EVENT_FORK |	    \
+			   UFFD_FEATURE_EVENT_REMAP |	    \
+			   UFFD_FEATURE_EVENT_MADVDONTNEED |	    \
+			   UFFD_FEATURE_SIGBUS)
 #define UFFD_API_IOCTLS				\
 	((__u64)1 << _UFFDIO_REGISTER |		\
 	 (__u64)1 << _UFFDIO_UNREGISTER |	\
@@ -72,6 +76,21 @@ struct uffd_msg {
 		} pagefault;
 
 		struct {
+			__u32	ufd;
+		} fork;
+
+		struct {
+			__u64	from;
+			__u64	to;
+			__u64	len;
+		} remap;
+
+		struct {
+			__u64	start;
+			__u64	end;
+		} madv_dn;
+
+		struct {
 			/* unused reserved fields */
 			__u64	reserved1;
 			__u64	reserved2;
@@ -84,9 +103,9 @@ struct uffd_msg {
  * Start at 0x12 and not at 0 to be more strict against bugs.
  */
 #define UFFD_EVENT_PAGEFAULT	0x12
-#if 0 /* not available yet */
 #define UFFD_EVENT_FORK		0x13
-#endif
+#define UFFD_EVENT_REMAP	0x14
+#define UFFD_EVENT_MADVDONTNEED	0x15
 
 /* flags for UFFD_EVENT_PAGEFAULT */
 #define UFFD_PAGEFAULT_FLAG_WRITE	(1<<0)	/* If this was a write fault */
@@ -104,11 +123,18 @@ struct uffdio_api {
 	 * Note: UFFD_EVENT_PAGEFAULT and UFFD_PAGEFAULT_FLAG_WRITE
 	 * are to be considered implicitly always enabled in all kernels as
 	 * long as the uffdio_api.api requested matches UFFD_API.
+	 *
+	 * UFFD_FEATURE_SIGBUS feature means no page-fault
+	 * (UFFD_EVENT_PAGEFAULT) event will be delivered, instead
+	 * a SIGBUS signal will be sent to the faulting process.
+	 * The application process can enable this behavior by adding
+	 * it to uffdio_api.features.
 	 */
-#if 0 /* not available yet */
 #define UFFD_FEATURE_PAGEFAULT_FLAG_WP		(1<<0)
 #define UFFD_FEATURE_EVENT_FORK			(1<<1)
-#endif
+#define UFFD_FEATURE_EVENT_REMAP		(1<<2)
+#define UFFD_FEATURE_EVENT_MADVDONTNEED		(1<<3)
+#define UFFD_FEATURE_SIGBUS			(1<<7)
 	__u64 features;
 
 	__u64 ioctls;
@@ -143,6 +169,7 @@ struct uffdio_copy {
 	 * range according to the uffdio_register.ioctls.
 	 */
 #define UFFDIO_COPY_MODE_DONTWAKE		((__u64)1<<0)
+#define UFFDIO_COPY_MODE_MMAP_TRYLOCK	      	((__u64)1<<63)
 	__u64 mode;
 
 	/*
@@ -155,6 +182,7 @@ struct uffdio_copy {
 struct uffdio_zeropage {
 	struct uffdio_range range;
 #define UFFDIO_ZEROPAGE_MODE_DONTWAKE		((__u64)1<<0)
+#define UFFDIO_ZEROPAGE_MODE_MMAP_TRYLOCK     	((__u64)1<<63)
 	__u64 mode;
 
 	/*
@@ -163,5 +191,14 @@ struct uffdio_zeropage {
 	 */
 	__s64 zeropage;
 };
+
+/*
+ * Flags for the userfaultfd(2) system call itself.
+ */
+
+/*
+ * Create a userfaultfd that can handle page faults only in user mode.
+ */
+#define UFFD_USER_MODE_ONLY 1
 
 #endif /* _LINUX_USERFAULTFD_H */

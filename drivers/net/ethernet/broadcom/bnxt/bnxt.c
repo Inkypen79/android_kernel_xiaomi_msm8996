@@ -5322,9 +5322,16 @@ static int bnxt_change_mtu(struct net_device *dev, int new_mtu)
 	return 0;
 }
 
-static int bnxt_setup_tc(struct net_device *dev, u8 tc)
+static int bnxt_setup_tc(struct net_device *dev, u32 handle, __be16 proto,
+			 struct tc_to_netdev *ntc)
 {
 	struct bnxt *bp = netdev_priv(dev);
+	u8 tc;
+
+	if (handle != TC_H_ROOT || ntc->type != TC_SETUP_MQPRIO)
+		return -EINVAL;
+
+	tc = ntc->tc;
 
 	if (tc > bp->max_tc) {
 		netdev_err(dev, "too many traffic classes requested: %d Max supported is %d\n",
@@ -5418,8 +5425,8 @@ static int bnxt_rx_flow_steer(struct net_device *dev, const struct sk_buff *skb,
 	rcu_read_lock();
 	hlist_for_each_entry_rcu(fltr, head, hash) {
 		if (bnxt_fltr_match(fltr, new_fltr)) {
+			rc = fltr->sw_id;
 			rcu_read_unlock();
-			rc = 0;
 			goto err_free;
 		}
 	}

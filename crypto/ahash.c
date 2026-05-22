@@ -23,6 +23,7 @@
 #include <linux/slab.h>
 #include <linux/seq_file.h>
 #include <linux/cryptouser.h>
+#include <linux/compiler.h>
 #include <net/netlink.h>
 
 #include "internal.h"
@@ -533,7 +534,7 @@ static int crypto_ahash_report(struct sk_buff *skb, struct crypto_alg *alg)
 #endif
 
 static void crypto_ahash_show(struct seq_file *m, struct crypto_alg *alg)
-	__attribute__ ((unused));
+	__maybe_unused;
 static void crypto_ahash_show(struct seq_file *m, struct crypto_alg *alg)
 {
 	seq_printf(m, "type         : ahash\n");
@@ -564,6 +565,12 @@ struct crypto_ahash *crypto_alloc_ahash(const char *alg_name, u32 type,
 	return crypto_alloc_tfm(alg_name, &crypto_ahash_type, type, mask);
 }
 EXPORT_SYMBOL_GPL(crypto_alloc_ahash);
+
+int crypto_has_ahash(const char *alg_name, u32 type, u32 mask)
+{
+	return crypto_type_has_alg(alg_name, &crypto_ahash_type, type, mask);
+}
+EXPORT_SYMBOL_GPL(crypto_has_ahash);
 
 static int ahash_prepare_alg(struct ahash_alg *alg)
 {
