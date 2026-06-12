@@ -216,13 +216,13 @@ time_mt(const struct sk_buff *skb, struct xt_action_param *par)
 
 	localtime_2(&current_time, stamp);
 
-	if (!(info->weekdays_match & (1 << current_time.weekday)))
+	if (!(info->weekdays_match & (1U << current_time.weekday)))
 		return false;
 
 	/* Do not spend time computing monthday if all days match anyway */
 	if (info->monthdays_match != XT_TIME_ALL_MONTHDAYS) {
 		localtime_3(&current_time, stamp);
-		if (!(info->monthdays_match & (1 << current_time.monthday)))
+		if (!(info->monthdays_match & (1U << current_time.monthday)))
 			return false;
 	}
 
@@ -235,13 +235,13 @@ static int time_mt_check(const struct xt_mtchk_param *par)
 
 	if (info->daytime_start > XT_TIME_MAX_DAYTIME ||
 	    info->daytime_stop > XT_TIME_MAX_DAYTIME) {
-		pr_info("invalid argument - start or "
-			"stop time greater than 23:59:59\n");
+		pr_info_ratelimited("invalid argument - start or stop time greater than 23:59:59\n");
 		return -EDOM;
 	}
 
 	if (info->flags & ~XT_TIME_ALL_FLAGS) {
-		pr_info("unknown flags 0x%x\n", info->flags & ~XT_TIME_ALL_FLAGS);
+		pr_info_ratelimited("unknown flags 0x%x\n",
+				    info->flags & ~XT_TIME_ALL_FLAGS);
 		return -EINVAL;
 	}
 

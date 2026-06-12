@@ -339,6 +339,56 @@ static inline int bitmap_parse(const char *buf, unsigned int buflen,
 	return __bitmap_parse(buf, buflen, 0, maskp, nmaskbits);
 }
 
+/*
+ * BITMAP_FROM_U64() - Represent u64 value in the format suitable for bitmap.
+ *
+ * Linux bitmaps are internally arrays of unsigned longs, i.e. 32-bit
+ * integers in 32-bit environment, and 64-bit integers in 64-bit one.
+ *
+ * There are four combinations of endianness and length of the word in linux
+ * ABIs: LE64, BE64, LE32 and BE32.
+ *
+ * On 64-bit kernels 64-bit LE and BE numbers are naturally ordered in
+ * bitmaps and therefore don't require any special handling.
+ *
+ * On 32-bit kernels 32-bit LE ABI orders lo word of 64-bit number in memory
+ * prior to hi, and 32-bit BE orders hi word prior to lo. The bitmap on the
+ * other hand is represented as an array of 32-bit words and the position of
+ * bit N may therefore be calculated as: word #(N/32) and bit #(N%32) in that
+ * word.  For example, bit #42 is located at 10th position of 2nd word.
+ * It matches 32-bit LE ABI, and we can simply let the compiler store 64-bit
+ * values in memory as it usually does. But for BE we need to swap hi and lo
+ * words manually.
+ *
+ * With all that, the macro BITMAP_FROM_U64() does explicit reordering of hi and
+ * lo parts of u64.  For LE32 it does nothing, and for BE environment it swaps
+ * hi and lo words, as is expected by bitmap.
+ */
+#if __BITS_PER_LONG == 64
+#define BITMAP_FROM_U64(n) (n)
+#else
+#define BITMAP_FROM_U64(n) ((unsigned long) ((u64)(n) & ULONG_MAX)), \
+				((unsigned long) ((u64)(n) >> 32))
+#endif
+
+/*
+ * bitmap_from_u64 - Check and swap words within u64.
+ *  @mask: source bitmap
+ *  @dst:  destination bitmap
+ *
+ * In 32-bit Big Endian kernel, when using (u32 *)(&val)[*]
+ * to read u64 mask, we will get the wrong word.
+ * That is "(u32 *)(&val)[0]" gets the upper 32 bits,
+ * but we expect the lower 32-bits of u64.
+ */
+static inline void bitmap_from_u64(unsigned long *dst, u64 mask)
+{
+	dst[0] = mask & ULONG_MAX;
+
+	if (sizeof(mask) > sizeof(unsigned long))
+		dst[1] = mask >> 32;
+}
+
 #endif /* __ASSEMBLY__ */
 
 #endif /* __LINUX_BITMAP_H */

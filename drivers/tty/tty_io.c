@@ -1093,13 +1093,13 @@ static ssize_t tty_read(struct file *file, char __user *buf, size_t count,
 	return i;
 }
 
-static void tty_write_unlock(struct tty_struct *tty)
+void tty_write_unlock(struct tty_struct *tty)
 {
 	mutex_unlock(&tty->atomic_write_lock);
 	wake_up_interruptible_poll(&tty->write_wait, POLLOUT);
 }
 
-static int tty_write_lock(struct tty_struct *tty, int ndelay)
+int tty_write_lock(struct tty_struct *tty, int ndelay)
 {
 	if (!mutex_trylock(&tty->atomic_write_lock)) {
 		if (ndelay)
@@ -1369,15 +1369,17 @@ static ssize_t tty_line_name(struct tty_driver *driver, int index, char *p)
  *	Locking: tty_mutex must be held. If the tty is found, bump the tty kref.
  */
 static struct tty_struct *tty_driver_lookup_tty(struct tty_driver *driver,
-		struct inode *inode, int idx)
+		struct file *file, int idx)
 {
 	struct tty_struct *tty;
 
-	if (driver->ops->lookup)
-		tty = driver->ops->lookup(driver, inode, idx);
-	else
+	if (driver->ops->lookup) {
+		tty = driver->ops->lookup(driver, file, idx);
+	} else {
+		if (idx >= driver->num)
+			return ERR_PTR(-EINVAL);
 		tty = driver->ttys[idx];
-
+	}
 	if (!IS_ERR(tty))
 		tty_kref_get(tty);
 	return tty;
@@ -2077,7 +2079,7 @@ retry_open:
 		}
 
 		/* check whether we're reopening an existing tty */
-		tty = tty_driver_lookup_tty(driver, inode, index);
+		tty = tty_driver_lookup_tty(driver, filp, index);
 		if (IS_ERR(tty)) {
 			retval = PTR_ERR(tty);
 			goto err_unlock;

@@ -75,6 +75,7 @@
 
 #define SYS_ID_AA64ISAR0_EL1		sys_reg(3, 0, 0, 6, 0)
 #define SYS_ID_AA64ISAR1_EL1		sys_reg(3, 0, 0, 6, 1)
+#define SYS_ID_AA64ISAR2_EL1		sys_reg(3, 0, 0, 6, 2)
 
 #define SYS_ID_AA64MMFR0_EL1		sys_reg(3, 0, 0, 7, 0)
 #define SYS_ID_AA64MMFR1_EL1		sys_reg(3, 0, 0, 7, 1)
@@ -238,20 +239,39 @@
 
 #include <linux/types.h>
 
-asm(
-"	.irp	num,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30\n"
-"	.equ	.L__reg_num_x\\num, \\num\n"
-"	.endr\n"
+#define __DEFINE_MRS_MSR_S_REGNUM				\
+"	.irp	num,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30\n" \
+"	.equ	.L__reg_num_x\\num, \\num\n"			\
+"	.endr\n"						\
 "	.equ	.L__reg_num_xzr, 31\n"
-"\n"
-"	.macro	mrs_s, rt, sreg\n"
-"	.inst	0xd5200000|(\\sreg)|(.L__reg_num_\\rt)\n"
+
+#define DEFINE_MRS_S						\
+	__DEFINE_MRS_MSR_S_REGNUM				\
+"	.macro	mrs_s, rt, sreg\n"				\
+"	.inst 0xd5200000|(\\sreg)|(.L__reg_num_\\rt)\n"	\
 "	.endm\n"
-"\n"
-"	.macro	msr_s, sreg, rt\n"
-"	.inst	0xd5000000|(\\sreg)|(.L__reg_num_\\rt)\n"
+
+#define DEFINE_MSR_S						\
+	__DEFINE_MRS_MSR_S_REGNUM				\
+"	.macro	msr_s, sreg, rt\n"				\
+"	.inst 0xd5000000|(\\sreg)|(.L__reg_num_\\rt)\n"		\
 "	.endm\n"
-);
+
+#define UNDEFINE_MRS_S						\
+"	.purgem	mrs_s\n"
+
+#define UNDEFINE_MSR_S						\
+"	.purgem	msr_s\n"
+
+#define __mrs_s(r, v)						\
+	DEFINE_MRS_S						\
+"	mrs_s %0, " __stringify(r) "\n"				\
+	UNDEFINE_MRS_S : "=r" (v)
+
+#define __msr_s(r, v)						\
+	DEFINE_MSR_S						\
+"	msr_s " __stringify(r) ", %x0\n"			\
+	UNDEFINE_MSR_S : : "rZ" (v)
 
 static inline void config_sctlr_el1(u32 clear, u32 set)
 {
@@ -277,6 +297,21 @@ static inline void config_sctlr_el1(u32 clear, u32 set)
 	u64 __val = (u64)v;					\
 	asm volatile("msr " __stringify(r) ", %0"		\
 		     : : "r" (__val));				\
+} while (0)
+
+/*
+ * For registers without architectural names, or simply unsupported by
+ * GAS.
+ */
+#define read_sysreg_s(r) ({					\
+	u64 __val;						\
+	asm volatile(__mrs_s(r, __val));			\
+	__val;							\
+})
+
+#define write_sysreg_s(v, r) do {				\
+	u64 __val = (u64)(v);					\
+	asm volatile(__msr_s(r, __val));			\
 } while (0)
 
 #endif

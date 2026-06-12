@@ -8,6 +8,11 @@
 
 extern struct timezone sys_tz;
 
+int get_timespec64(struct timespec64 *ts,
+		const struct timespec __user *uts);
+int put_timespec64(const struct timespec64 *ts,
+		struct timespec __user *uts);
+
 #define TIME_T_MAX	(time_t)((1UL << ((sizeof(time_t) << 3) - 1)) - 1)
 #define TIMER_LOCK_TIGHT_LOOP_DELAY_NS 350
 
@@ -206,7 +211,20 @@ struct tm {
 	int tm_yday;
 };
 
-void time_to_tm(time_t totalsecs, int offset, struct tm *result);
+void time64_to_tm(time64_t totalsecs, int offset, struct tm *result);
+
+/**
+ * time_to_tm - converts the calendar time to local broken-down time
+ *
+ * @totalsecs	the number of seconds elapsed since 00:00:00 on January 1, 1970,
+ *		Coordinated Universal Time (UTC).
+ * @offset	offset seconds adding to totalsecs.
+ * @result	pointer to struct tm variable to receive broken-down time
+ */
+static inline void time_to_tm(time_t totalsecs, int offset, struct tm *result)
+{
+	time64_to_tm(totalsecs, offset, result);
+}
 
 /**
  * timespec_to_ns - Convert timespec to nanoseconds

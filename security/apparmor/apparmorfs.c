@@ -100,7 +100,7 @@ static char *aa_simple_write_to_buffer(int op, const char __user *userbuf,
 		return ERR_PTR(-EACCES);
 
 	/* freed by caller to simple_write_to_buffer */
-	data = kvmalloc(alloc_size);
+	data = kvmalloc(alloc_size, GFP_KERNEL);
 	if (data == NULL)
 		return ERR_PTR(-ENOMEM);
 
@@ -411,6 +411,10 @@ int __aa_fs_profile_mkdir(struct aa_profile *profile, struct dentry *parent)
 		struct aa_profile *p;
 		p = aa_deref_parent(profile);
 		dent = prof_dir(p);
+		if (!dent) {
+			error = -ENOENT;
+			goto fail2;
+		}
 		/* adding to parent that previously didn't have children */
 		dent = securityfs_create_dir("profiles", dent);
 		if (IS_ERR(dent))

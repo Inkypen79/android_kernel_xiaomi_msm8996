@@ -41,17 +41,14 @@ static const struct v4l2_subdev_internal_ops msm_sensor_init_internal_ops;
 
 static int msm_sensor_wait_for_probe_done(struct msm_sensor_init_t *s_init)
 {
-	int rc = 0;
-
 	if (s_init->module_init_status == 1) {
 		CDBG("msm_cam_get_module_init_status -2\n");
 		return 0;
 	}
-
 	wait_event(s_init->state_wait,
 		(s_init->module_init_status == 1));
 
-	return rc;
+	return 0;
 }
 
 /* Static function definition */

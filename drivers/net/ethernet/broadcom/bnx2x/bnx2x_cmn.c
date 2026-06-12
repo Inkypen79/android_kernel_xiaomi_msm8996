@@ -796,6 +796,7 @@ static void bnx2x_tpa_stop(struct bnx2x *bp, struct bnx2x_fastpath *fp,
 			BNX2X_ERR("skb_put is about to fail...  pad %d  len %d  rx_buf_size %d\n",
 				  pad, len, fp->rx_buf_size);
 			bnx2x_panic();
+			bnx2x_frag_free(fp, new_data);
 			return;
 		}
 #endif
@@ -4352,6 +4353,14 @@ int bnx2x_setup_tc(struct net_device *dev, u8 num_tc)
 	}
 
 	return 0;
+}
+
+int __bnx2x_setup_tc(struct net_device *dev, u32 handle, __be16 proto,
+		     struct tc_to_netdev *tc)
+{
+	if (handle != TC_H_ROOT || tc->type != TC_SETUP_MQPRIO)
+		return -EINVAL;
+	return bnx2x_setup_tc(dev, tc->tc);
 }
 
 /* called with rtnl_lock */
