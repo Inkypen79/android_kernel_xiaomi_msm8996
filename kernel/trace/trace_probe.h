@@ -229,7 +229,7 @@ ASSIGN_FETCH_FUNC(file_offset, ftype),			\
 #define FETCH_TYPE_STRING	0
 #define FETCH_TYPE_STRSIZE	1
 
-#ifdef CONFIG_KPROBE_EVENT
+#ifdef CONFIG_KPROBE_EVENTS
 struct symbol_cache;
 unsigned long update_symbol_cache(struct symbol_cache *sc);
 void free_symbol_cache(struct symbol_cache *sc);
@@ -259,7 +259,7 @@ alloc_symbol_cache(const char *sym, long offset)
 {
 	return NULL;
 }
-#endif /* CONFIG_KPROBE_EVENT */
+#endif /* CONFIG_KPROBE_EVENTS */
 
 struct probe_arg {
 	struct fetch_param	fetch;
@@ -415,3 +415,14 @@ store_trace_args(int ent_size, struct trace_probe *tp, struct pt_regs *regs,
 }
 
 extern int set_print_fmt(struct trace_probe *tp, bool is_return);
+
+#ifdef CONFIG_PERF_EVENTS
+extern struct trace_event_call *
+create_local_trace_kprobe(char *func, void *addr, unsigned long offs,
+			  bool is_return);
+extern void destroy_local_trace_kprobe(struct trace_event_call *event_call);
+
+extern struct trace_event_call *
+create_local_trace_uprobe(char *name, unsigned long offs, bool is_return);
+extern void destroy_local_trace_uprobe(struct trace_event_call *event_call);
+#endif
