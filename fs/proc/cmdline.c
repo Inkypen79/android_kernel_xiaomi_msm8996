@@ -1,5 +1,6 @@
 #include <linux/fs.h>
 #include <linux/init.h>
+#include <linux/jump_label.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <asm/setup.h>
